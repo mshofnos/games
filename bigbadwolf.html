@@ -31,11 +31,14 @@ const W = canvas.width  = 900;
 const H = canvas.height = 560;
 
 function resizeCanvas() {
-  const scale = Math.min(window.innerWidth / W, window.innerHeight / H);
-  canvas.style.width  = W + 'px';
-  canvas.style.height = H + 'px';
-  canvas.style.transform = `scale(${scale})`;
-  canvas.style.marginTop = `${(window.innerHeight - H * scale) / 2}px`;
+  const scale = Math.min(1, window.innerWidth / W, window.innerHeight / H);
+  if (scale < 1) {
+    canvas.style.transform = `scale(${scale})`;
+    canvas.style.marginTop = `${(window.innerHeight - H * scale) / 2}px`;
+  } else {
+    canvas.style.transform = '';
+    canvas.style.marginTop = '';
+  }
 }
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
