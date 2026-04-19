@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>Big Bad Wolf!</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -15,7 +16,7 @@
       overflow: hidden;
       touch-action: none;
     }
-    canvas { display: block; }
+    canvas { display: block; transform-origin: top center; }
   </style>
 </head>
 <body>
@@ -28,6 +29,16 @@ const canvas = document.getElementById('game');
 const ctx    = canvas.getContext('2d');
 const W = canvas.width  = 900;
 const H = canvas.height = 560;
+
+function resizeCanvas() {
+  const scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+  canvas.style.width  = W + 'px';
+  canvas.style.height = H + 'px';
+  canvas.style.transform = `scale(${scale})`;
+  canvas.style.marginTop = `${(window.innerHeight - H * scale) / 2}px`;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
 
 // ── Audio ─────────────────────────────────────────────────────────
 let audioCtx;
@@ -152,11 +163,79 @@ document.addEventListener('keydown', e => {
 });
 document.addEventListener('keyup', e => { keys[e.code]=false; });
 
-// Touch: move toward touch Y, auto-shoot
-let touchY = null;
-canvas.addEventListener('touchstart', e => { e.preventDefault(); initAudio(); touchY = e.touches[0].clientY - canvas.getBoundingClientRect().top; if (gstate!=='playing') startGame(); }, {passive:false});
-canvas.addEventListener('touchmove',  e => { e.preventDefault(); touchY = e.touches[0].clientY - canvas.getBoundingClientRect().top; }, {passive:false});
-canvas.addEventListener('touchend',   e => { touchY = null; });
+// Virtual touch controls
+const vpad = { up:false, down:false, left:false, right:false, shoot:false };
+let touchControls = false;
+const activeTouches = new Map();
+
+const DPAD_X=110, DPAD_Y=478;
+const SHOOT_X=830, SHOOT_Y=490, SHOOT_R=52;
+const WPN_X=710, WPN_Y=420, WPN_R=38;
+
+function touchToCanvas(t) {
+  const r=canvas.getBoundingClientRect();
+  return { x:(t.clientX-r.left)*(W/r.width), y:(t.clientY-r.top)*(H/r.height) };
+}
+function btnAt(cx, cy) {
+  if (Math.hypot(cx-SHOOT_X, cy-SHOOT_Y) < SHOOT_R+12) return 'shoot';
+  if (Math.hypot(cx-WPN_X,   cy-WPN_Y)   < WPN_R+12)   return 'weapon';
+  const dx=cx-DPAD_X, dy=cy-DPAD_Y;
+  if (Math.hypot(dx,dy) < 90) {
+    if (Math.abs(dy)>=Math.abs(dx)) return dy<0?'up':'down';
+    return dx<0?'left':'right';
+  }
+  return null;
+}
+function cycleWeapon() {
+  const list=selectedChar==='girl'?['rainbow','bubble']:['baseball','laser','lava','sword'];
+  switchWeapon(list[(list.indexOf(weapon)+1)%list.length]);
+}
+function applyBtn(btn, on) {
+  if (!btn) return;
+  if (btn==='weapon') { if (on) cycleWeapon(); }
+  else if (btn==='shoot') vpad.shoot=on;
+  else vpad[btn]=on;
+}
+
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault(); touchControls=true; initAudio();
+  Array.from(e.changedTouches).forEach(t => {
+    const {x,y}=touchToCanvas(t);
+    if (gstate==='charselect') {
+      if (y>505) { startGame(); return; }
+      selectedChar=x<W/2?'boy':'girl';
+      return;
+    }
+    if (gstate==='gameover') { gstate='charselect'; return; }
+    const btn=btnAt(x,y);
+    activeTouches.set(t.identifier, btn);
+    applyBtn(btn, true);
+  });
+}, {passive:false});
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  Array.from(e.changedTouches).forEach(t => {
+    if (gstate!=='playing') return;
+    const {x,y}=touchToCanvas(t);
+    const old=activeTouches.get(t.identifier);
+    const btn=btnAt(x,y);
+    if (old!==btn) { applyBtn(old,false); activeTouches.set(t.identifier,btn); applyBtn(btn,true); }
+  });
+}, {passive:false});
+
+canvas.addEventListener('touchend', e => {
+  Array.from(e.changedTouches).forEach(t => {
+    applyBtn(activeTouches.get(t.identifier), false);
+    activeTouches.delete(t.identifier);
+  });
+});
+canvas.addEventListener('touchcancel', e => {
+  Array.from(e.changedTouches).forEach(t => {
+    applyBtn(activeTouches.get(t.identifier), false);
+    activeTouches.delete(t.identifier);
+  });
+});
 
 function switchWeapon(w) {
   weapon = w;
@@ -1107,13 +1186,20 @@ function drawCharSelect() {
   ctx.fillStyle='#ffe44d'; ctx.font='26px serif'; ctx.textAlign='center';
   ctx.fillText('▼', arrowX, 87); ctx.restore();
 
-  // Controls
+  // Controls hint
   ctx.textAlign='center'; ctx.fillStyle='#aaddff';
   ctx.font='17px "Comic Sans MS",cursive';
-  ctx.fillText('Arrow Keys  ←  →  to choose', W/2, 494);
-  ctx.save(); ctx.globalAlpha=.7+.3*Math.sin(frame*.08+1);
+  ctx.fillText('← → to choose  •  tap a card on mobile', W/2, 494);
+
+  // Play button
+  const pulse=.7+.3*Math.sin(frame*.08+1);
+  ctx.save(); ctx.globalAlpha=pulse;
+  ctx.fillStyle='rgba(255,220,40,.22)';
+  ctx.beginPath(); ctx.roundRect(W/2-165,507,330,50,16); ctx.fill();
+  ctx.strokeStyle='#ffe44d'; ctx.lineWidth=2.5;
+  ctx.beginPath(); ctx.roundRect(W/2-165,507,330,50,16); ctx.stroke();
   ctx.fillStyle='#ffe44d'; ctx.font='bold 26px "Comic Sans MS",cursive';
-  ctx.fillText('Press SPACE to Play!', W/2, 530);
+  ctx.fillText('▶  Play!  (SPACE)', W/2, 539);
   ctx.restore();
 }
 
@@ -1130,18 +1216,13 @@ function update() {
 
   // shoot
   if (shootCD>0) shootCD--;
-  if (keys['Space']||touchY!==null) shoot();
+  if (keys['Space']||vpad.shoot) shoot();
 
   // move
-  if (keys['ArrowUp']  ||keys['KeyW']) player.y-=player.speed;
-  if (keys['ArrowDown'] ||keys['KeyS']) player.y+=player.speed;
-  if (keys['ArrowLeft'] ||keys['KeyA']) player.x-=player.speed*.8;
-  if (keys['ArrowRight']||keys['KeyD']) player.x+=player.speed*.8;
-  // touch: chase touch Y
-  if (touchY!==null) {
-    const dy=touchY-player.y;
-    player.y+=Math.sign(dy)*Math.min(Math.abs(dy)*.1, player.speed);
-  }
+  if (keys['ArrowUp']   ||keys['KeyW']||vpad.up)    player.y-=player.speed;
+  if (keys['ArrowDown'] ||keys['KeyS']||vpad.down)   player.y+=player.speed;
+  if (keys['ArrowLeft'] ||keys['KeyA']||vpad.left)   player.x-=player.speed*.8;
+  if (keys['ArrowRight']||keys['KeyD']||vpad.right)  player.x+=player.speed*.8;
   player.x=Math.max(18, Math.min(W*.58, player.x));
   player.y=Math.max(28, Math.min(H-60,  player.y));
   if (player.invincible>0) player.invincible--;
@@ -1231,6 +1312,56 @@ function update() {
   lightnings=lightnings.filter(l=>l.life>0);
 }
 
+// ── Virtual Controls (mobile) ─────────────────────────────────────
+function drawVirtualControls() {
+  if (!touchControls || gstate!=='playing') return;
+  ctx.save();
+  ctx.globalAlpha=0.82;
+
+  function roundBtn(bx, by, bw, bh, active) {
+    ctx.fillStyle=active?'rgba(255,220,80,.88)':'rgba(55,55,110,.65)';
+    ctx.strokeStyle=active?'rgba(255,240,140,.95)':'rgba(130,130,210,.6)';
+    ctx.lineWidth=2;
+    ctx.beginPath(); ctx.roundRect(bx,by,bw,bh,10); ctx.fill(); ctx.stroke();
+  }
+  function circleBtn(bx, by, r, active, col) {
+    ctx.fillStyle=active?(col||'rgba(230,70,50,.9)'):'rgba(55,55,110,.65)';
+    ctx.strokeStyle=active?'rgba(255,180,140,.95)':'rgba(130,130,210,.6)';
+    ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.arc(bx,by,r,0,Math.PI*2); ctx.fill(); ctx.stroke();
+  }
+
+  ctx.font='bold 22px Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
+
+  // D-pad
+  const ds=44, sp=50;
+  roundBtn(DPAD_X-ds/2, DPAD_Y-sp-ds/2, ds, ds, vpad.up);
+  ctx.fillStyle=vpad.up?'#222':'#dde'; ctx.fillText('▲',DPAD_X,DPAD_Y-sp);
+  roundBtn(DPAD_X-ds/2, DPAD_Y+sp-ds/2, ds, ds, vpad.down);
+  ctx.fillStyle=vpad.down?'#222':'#dde'; ctx.fillText('▼',DPAD_X,DPAD_Y+sp);
+  roundBtn(DPAD_X-sp-ds/2, DPAD_Y-ds/2, ds, ds, vpad.left);
+  ctx.fillStyle=vpad.left?'#222':'#dde'; ctx.fillText('◀',DPAD_X-sp,DPAD_Y);
+  roundBtn(DPAD_X+sp-ds/2, DPAD_Y-ds/2, ds, ds, vpad.right);
+  ctx.fillStyle=vpad.right?'#222':'#dde'; ctx.fillText('▶',DPAD_X+sp,DPAD_Y);
+  ctx.fillStyle='rgba(70,70,130,.55)';
+  ctx.beginPath(); ctx.arc(DPAD_X,DPAD_Y,16,0,Math.PI*2); ctx.fill();
+
+  // Weapon cycle button
+  circleBtn(WPN_X, WPN_Y, WPN_R, false, 'rgba(80,40,160,.78)');
+  const wIco={baseball:'⚾',laser:'🔴',lava:'🌋',sword:'⚡',rainbow:'🌈',bubble:'🫧'};
+  ctx.font='20px Arial'; ctx.fillStyle='#fff';
+  ctx.fillText(wIco[weapon]||'?', WPN_X, WPN_Y-7);
+  ctx.font='bold 10px Arial'; ctx.fillStyle='#bbf';
+  ctx.fillText('NEXT', WPN_X, WPN_Y+15);
+
+  // Shoot button
+  circleBtn(SHOOT_X, SHOOT_Y, SHOOT_R, vpad.shoot, 'rgba(210,55,35,.92)');
+  ctx.font='bold 16px Arial'; ctx.fillStyle='#fff';
+  ctx.fillText('SHOOT', SHOOT_X, SHOOT_Y);
+
+  ctx.textBaseline='alphabetic'; ctx.restore();
+}
+
 // ── Main Loop ─────────────────────────────────────────────────────
 function loop() {
   if (gstate==='charselect') { update(); drawCharSelect(); }
@@ -1245,6 +1376,7 @@ function loop() {
     drawPlayer();
     drawFloats();
     drawHUD();
+    drawVirtualControls();
   }
   requestAnimationFrame(loop);
 }
