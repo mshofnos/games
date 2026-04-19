@@ -66,6 +66,17 @@ function beep(type) {
     o2.type='sawtooth'; o2.frequency.setValueAtTime(500,t+.03); o2.frequency.exponentialRampToValueAtTime(80,t+.22);
     g2.gain.setValueAtTime(0,t+.03); g2.gain.linearRampToValueAtTime(.18,t+.06); g2.gain.exponentialRampToValueAtTime(.001,t+.28);
     o2.start(t+.03); o2.stop(t+.3);
+  } else if (type === 'rainbow') {
+    o.type='sine';
+    o.frequency.setValueAtTime(700,t); o.frequency.linearRampToValueAtTime(1100,t+.04);
+    o.frequency.linearRampToValueAtTime(500,t+.1);
+    g.gain.setValueAtTime(.09,t); g.gain.exponentialRampToValueAtTime(.001,t+.15);
+    o.start(t); o.stop(t+.18);
+  } else if (type === 'bubble') {
+    o.type='sine';
+    o.frequency.setValueAtTime(340,t); o.frequency.exponentialRampToValueAtTime(560,t+.07);
+    g.gain.setValueAtTime(.07,t); g.gain.exponentialRampToValueAtTime(.001,t+.1);
+    o.start(t); o.stop(t+.12);
   } else if (type === 'boom') {
     o.type = 'triangle';
     o.frequency.setValueAtTime(380, t);
@@ -105,9 +116,11 @@ const PLANETS = [
 ];
 
 // ── Game State ────────────────────────────────────────────────────
-let gstate = 'start';  // start | playing | gameover
+let gstate = 'charselect';  // charselect | playing | gameover
+let selectedChar = 'boy';   // boy | girl
 let score=0, hiScore=0, lives=5, frame=0;
-let weapon = 'baseball';  // baseball | laser | lava
+let weapon = 'baseball';  // baseball | laser | lava | sword | rainbow | bubble
+let rainbowHue = 0;
 let shootCD = 0, spawnTimer = 0, diff = 1, diffTimer = 0;
 
 const player = { x:110, y:H/2, speed:4.8, invincible:0, hitFlash:0 };
@@ -121,12 +134,20 @@ document.addEventListener('keydown', e => {
   const fresh = !keys[e.code];
   keys[e.code] = true;
   if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault();
-  if (e.code==='Digit1') switchWeapon('baseball');
-  if (e.code==='Digit2') switchWeapon('laser');
-  if (e.code==='Digit3') switchWeapon('lava');
-  if (e.code==='Digit4') switchWeapon('sword');
-  if (fresh && (e.code==='Space'||e.code==='Enter') && gstate!=='playing') {
-    initAudio(); startGame();
+  if (gstate==='charselect') {
+    if (e.code==='ArrowLeft'  || e.code==='KeyA') selectedChar='boy';
+    if (e.code==='ArrowRight' || e.code==='KeyD') selectedChar='girl';
+  }
+  if (gstate==='playing') {
+    if (e.code==='Digit1') switchWeapon(selectedChar==='girl'?'rainbow':'baseball');
+    if (e.code==='Digit2') switchWeapon(selectedChar==='girl'?'bubble':'laser');
+    if (e.code==='Digit3' && selectedChar==='boy') switchWeapon('lava');
+    if (e.code==='Digit4' && selectedChar==='boy') switchWeapon('sword');
+  }
+  if (fresh && (e.code==='Space'||e.code==='Enter')) {
+    initAudio();
+    if (gstate==='charselect') startGame();
+    else if (gstate==='gameover') gstate='charselect';
   }
 });
 document.addEventListener('keyup', e => { keys[e.code]=false; });
@@ -139,14 +160,14 @@ canvas.addEventListener('touchend',   e => { touchY = null; });
 
 function switchWeapon(w) {
   weapon = w;
-  const labels = {baseball:'⚾ Baseball!', laser:'🔴 Laser!', lava:'🌋 Lava Spray!', sword:'⚡ Lightning Sword!'};
+  const labels = {baseball:'⚾ Baseball!', laser:'🔴 Laser!', lava:'🌋 Lava Spray!', sword:'⚡ Lightning Sword!', rainbow:'🌈 Rainbow Blast!', bubble:'🫧 Bubbles!'};
   spawnFloat(player.x+50, player.y-50, labels[w], '#ffe44d', 40);
 }
 
 // ── Start / Reset ─────────────────────────────────────────────────
 function startGame() {
   score=0; lives=5; frame=0; diff=1; diffTimer=0;
-  weapon='baseball'; shootCD=0; spawnTimer=0;
+  weapon=selectedChar==='girl'?'rainbow':'baseball'; rainbowHue=0; shootCD=0; spawnTimer=0;
   player.x=110; player.y=H/2; player.invincible=0; player.hitFlash=0;
   projectiles=[]; enemies=[]; particles=[]; floats=[]; lightnings=[];
   swordAngle=-0.8; swordSwinging=0;
@@ -171,7 +192,7 @@ function shoot() {
       r:11+Math.random()*4, life:60, maxLife:60
     }));
     shootCD=15; beep('lava');
-  } else {
+  } else if (weapon==='sword') {
     // sword: lightning strikes nearest enemy from sky
     const target = enemies.length
       ? enemies.reduce((b,e) => Math.abs(e.x-player.x)<Math.abs(b.x-player.x)?e:b)
@@ -193,6 +214,14 @@ function shoot() {
       }
     }
     swordSwinging=22; shootCD=32; beep('lightning');
+  } else if (weapon==='rainbow') {
+    rainbowHue=(rainbowHue+55)%360;
+    projectiles.push({type:'rainbow', x:cx, y:cy, vx:13, vy:0, r:13, hue:rainbowHue});
+    shootCD=13; beep('rainbow');
+  } else {
+    // bubble
+    projectiles.push({type:'bubble', x:cx, y:cy, vx:4.5, vy:0, r:21, wobble:Math.random()*Math.PI*2});
+    shootCD=22; beep('bubble');
   }
 }
 
@@ -281,6 +310,7 @@ function drawBG() {
 
 // ── Draw Player: boy on red kick scooter ──────────────────────────
 function drawPlayer() {
+  if (selectedChar==='girl') { drawUnicornGirl(); return; }
   const {x, y, invincible, hitFlash} = player;
   if (invincible>0 && Math.floor(frame/5)%2===0) return;
 
@@ -668,19 +698,43 @@ function drawProjectile(p) {
     ctx.fillStyle='#ccffee';
     ctx.beginPath(); ctx.roundRect(p.x,p.y-p.h/2+1,p.w,p.h-2,(p.h-2)/2); ctx.fill();
     ctx.shadowBlur=0;
-  } else {
-    // lava blob
-    const fade = p.life/p.maxLife;
-    ctx.globalAlpha = 0.4 + fade*0.6;
+  } else if (p.type==='lava') {
+    const fade=p.life/p.maxLife;
+    ctx.globalAlpha=0.4+fade*.6;
     ctx.shadowColor='#ff4400'; ctx.shadowBlur=18;
-    ctx.fillStyle='#cc2200';
-    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle='#cc2200'; ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill();
     ctx.shadowColor='#ff8800'; ctx.shadowBlur=10;
-    ctx.fillStyle='#ff5500';
-    ctx.beginPath(); ctx.arc(p.x, p.y, p.r*.7, 0, Math.PI*2); ctx.fill();
-    ctx.fillStyle='#ffcc00';
-    ctx.beginPath(); ctx.arc(p.x-p.r*.2, p.y-p.r*.2, p.r*.35, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle='#ff5500'; ctx.beginPath(); ctx.arc(p.x,p.y,p.r*.7,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#ffcc00'; ctx.beginPath(); ctx.arc(p.x-p.r*.2,p.y-p.r*.2,p.r*.35,0,Math.PI*2); ctx.fill();
     ctx.shadowBlur=0; ctx.globalAlpha=1;
+  } else if (p.type==='rainbow') {
+    ctx.save(); ctx.translate(p.x,p.y);
+    ctx.shadowColor=`hsl(${p.hue},100%,65%)`; ctx.shadowBlur=18;
+    const rg=ctx.createRadialGradient(0,0,1,0,0,p.r);
+    rg.addColorStop(0,'#ffffff');
+    rg.addColorStop(0.35,`hsl(${p.hue},100%,72%)`);
+    rg.addColorStop(1,`hsl(${(p.hue+60)%360},100%,50%)`);
+    ctx.fillStyle=rg; ctx.beginPath(); ctx.arc(0,0,p.r,0,Math.PI*2); ctx.fill();
+    ctx.shadowBlur=5;
+    ['#ff88ff','#88ffff','#ffff88'].forEach((c,si)=>{
+      const sa=(frame*.25+si*2.09)%(Math.PI*2);
+      ctx.fillStyle=c; ctx.beginPath(); ctx.arc(Math.cos(sa)*(p.r+5),Math.sin(sa)*(p.r+5),2.5,0,Math.PI*2); ctx.fill();
+    });
+    ctx.shadowBlur=0; ctx.restore();
+  } else {
+    // bubble
+    ctx.save(); ctx.translate(p.x,p.y);
+    ctx.shadowColor='#aaddff'; ctx.shadowBlur=9;
+    ctx.strokeStyle='rgba(160,210,255,.78)'; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.arc(0,0,p.r,0,Math.PI*2); ctx.stroke();
+    ctx.fillStyle='rgba(180,225,255,.13)'; ctx.beginPath(); ctx.arc(0,0,p.r,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle='rgba(200,235,255,.32)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.arc(0,0,p.r*.68,0,Math.PI*2); ctx.stroke();
+    ctx.fillStyle='rgba(255,255,255,.72)';
+    ctx.beginPath(); ctx.ellipse(-p.r*.28,-p.r*.3,p.r*.22,p.r*.13,-0.5,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,.38)';
+    ctx.beginPath(); ctx.ellipse(p.r*.2,p.r*.2,p.r*.08,p.r*.05,0.4,0,Math.PI*2); ctx.fill();
+    ctx.shadowBlur=0; ctx.restore();
   }
   ctx.restore();
 }
@@ -706,10 +760,10 @@ function drawHUD() {
     ctx.fillText(i<lives?'❤️':'🖤', W-12-(4-i)*34, 38);
   }
   ctx.font='15px "Comic Sans MS",cursive'; ctx.textAlign='left';
-  const weaponColors = {baseball:'#ffe44d', laser:'#00ffcc', lava:'#ff6622', sword:'#aaddff'};
-  const weaponLabels = {baseball:'⚾ Baseball  [1]', laser:'🔴 Laser  [2]', lava:'🌋 Lava Spray  [3]', sword:'⚡ Lightning Sword  [4]'};
-  ctx.fillStyle=weaponColors[weapon];
-  ctx.fillText(weaponLabels[weapon] + '   (1/2/3/4 to switch)', 14, H-12);
+  const weaponColors = {baseball:'#ffe44d', laser:'#00ffcc', lava:'#ff6622', sword:'#aaddff', rainbow:'#ff88ff', bubble:'#88eeff'};
+  const weaponLabels = {baseball:'⚾ Baseball [1]', laser:'🔴 Laser [2]', lava:'🌋 Lava [3]', sword:'⚡ Sword [4]', rainbow:'🌈 Rainbow [1]', bubble:'🫧 Bubbles [2]'};
+  ctx.fillStyle=weaponColors[weapon]||'#fff';
+  ctx.fillText((weaponLabels[weapon]||weapon) + '   (1/2 to switch)', 14, H-12);
 }
 
 // ── Floating Score Text ───────────────────────────────────────────
@@ -769,16 +823,298 @@ function drawGameOver() {
   const pulse=.7+.3*Math.sin(frame*.08);
   ctx.globalAlpha=pulse; ctx.fillStyle='#adf';
   ctx.font='bold 24px "Comic Sans MS",cursive';
-  ctx.fillText('Press SPACE to Play Again!', W/2, H/2+110);
+  ctx.fillText('Press SPACE to choose your hero!', W/2, H/2+110);
   ctx.globalAlpha=1;
 }
 
-// Stateless player draw (used in title preview)
+// Stateless player draw helpers
 function drawPlayerAt(x, y, inv, hf) {
-  const saved = {x:player.x, y:player.y, invincible:player.invincible, hitFlash:player.hitFlash};
+  const saved={x:player.x,y:player.y,invincible:player.invincible,hitFlash:player.hitFlash};
   player.x=x; player.y=y; player.invincible=inv; player.hitFlash=hf;
-  drawPlayer();
-  Object.assign(player, saved);
+  const sc=selectedChar; selectedChar='boy'; drawPlayer(); selectedChar=sc;
+  Object.assign(player,saved);
+}
+function drawUnicornGirlAt(x, y, inv, hf) {
+  const saved={x:player.x,y:player.y,invincible:player.invincible,hitFlash:player.hitFlash};
+  player.x=x; player.y=y; player.invincible=inv; player.hitFlash=hf;
+  drawUnicornGirl();
+  Object.assign(player,saved);
+}
+
+// ── Draw Unicorn Girl ─────────────────────────────────────────────
+function drawUnicornGirl() {
+  const {x,y,invincible,hitFlash}=player;
+  if (invincible>0 && Math.floor(frame/5)%2===0) return;
+  ctx.save(); ctx.translate(x,y);
+
+  ctx.fillStyle='rgba(0,0,0,.13)';
+  ctx.beginPath(); ctx.ellipse(0,38,50,10,0,0,Math.PI*2); ctx.fill();
+
+  const lb=Math.sin(frame*.12);
+  const rc=['#ff5555','#ff9944','#ffdd33','#55cc55','#4499ff','#aa44ff'];
+
+  // === UNICORN ===
+  // Back legs
+  ctx.strokeStyle='#e8eeff'; ctx.lineWidth=10; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(-20,10); ctx.lineTo(-24+lb*8,34); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-30,10); ctx.lineTo(-28-lb*6,34); ctx.stroke();
+  // Front legs
+  ctx.beginPath(); ctx.moveTo(20,10); ctx.lineTo(24-lb*8,34); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(30,10); ctx.lineTo(28+lb*6,34); ctx.stroke();
+  // Hooves
+  [[24-lb*8,34],[28+lb*6,34],[-24+lb*8,34],[-28-lb*6,34]].forEach(([hx,hy])=>{
+    ctx.fillStyle='#b8c4dd'; ctx.beginPath(); ctx.ellipse(hx,hy,7,4,0,0,Math.PI*2); ctx.fill();
+  });
+
+  // Tail
+  ctx.save(); ctx.translate(-46,2);
+  rc.forEach((c,i)=>{
+    ctx.strokeStyle=c; ctx.lineWidth=3.5; ctx.globalAlpha=.88;
+    ctx.beginPath(); ctx.moveTo(0,0);
+    ctx.quadraticCurveTo(-12+i*1.5,8+Math.sin(frame*.09+i)*.6,-18+i*2,20+i*4);
+    ctx.stroke();
+  });
+  ctx.restore(); ctx.globalAlpha=1;
+
+  // Body
+  ctx.fillStyle='#f0f0ff'; ctx.beginPath(); ctx.ellipse(0,0,46,21,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,.5)'; ctx.beginPath(); ctx.ellipse(-5,-7,33,11,-0.15,0,Math.PI*2); ctx.fill();
+
+  // Neck
+  ctx.fillStyle='#f0f0ff'; ctx.beginPath(); ctx.ellipse(34,-13,13,19,0.35,0,Math.PI*2); ctx.fill();
+
+  // Rainbow mane
+  rc.forEach((c,i)=>{
+    ctx.strokeStyle=c; ctx.lineWidth=3; ctx.globalAlpha=.85;
+    ctx.beginPath(); ctx.moveTo(28,-24+i*1.5);
+    ctx.quadraticCurveTo(22,-13+i+Math.sin(frame*.1+i)*.4,16,-2+i); ctx.stroke();
+  });
+  ctx.globalAlpha=1;
+
+  // Head
+  ctx.fillStyle='#f0f0ff'; ctx.beginPath(); ctx.ellipse(47,-23,19,13,-0.15,0,Math.PI*2); ctx.fill();
+  // Nostril
+  ctx.fillStyle='#d8c8ee'; ctx.beginPath(); ctx.ellipse(59,-25,3,2,0,0,Math.PI*2); ctx.fill();
+  // Eye
+  ctx.fillStyle='#6622aa'; ctx.beginPath(); ctx.ellipse(50,-27,4,5,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(51,-28,1.5,0,Math.PI*2); ctx.fill();
+
+  // Horn
+  ctx.save(); ctx.translate(47,-35); ctx.rotate(-0.2);
+  const hg=ctx.createLinearGradient(-3,0,3,-24);
+  hg.addColorStop(0,'#e8b800'); hg.addColorStop(1,'#fffaa0');
+  ctx.fillStyle=hg; ctx.beginPath(); ctx.moveTo(-4,0); ctx.lineTo(4,0); ctx.lineTo(0,-25); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle='#b89000'; ctx.lineWidth=1.2;
+  for(let hi=1;hi<5;hi++){
+    const hy=-hi*5.5, hw=3.5-hi*.6;
+    ctx.beginPath(); ctx.moveTo(-hw,hy); ctx.lineTo(hw,hy); ctx.stroke();
+  }
+  ctx.restore();
+
+  // === GIRL ===
+
+  // Braid (light purple, behind body)
+  for(let bi=0;bi<9;bi++){
+    const bx=-13+Math.sin(bi*.65)*6, by=-28+bi*9;
+    ctx.fillStyle=bi%2===0?'#cc77ff':'#aa55ee';
+    ctx.save(); ctx.translate(bx,by); ctx.rotate(bi*.07);
+    ctx.beginPath(); ctx.ellipse(0,0,5.5,8,0,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+  // Pink bow at braid tip
+  const btx=-13+Math.sin(5.85)*6, bty=-28+81;
+  ctx.fillStyle='#ff77bb';
+  ctx.beginPath(); ctx.ellipse(btx-7,bty,8,5,-0.4,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(btx+7,bty,8,5,0.4,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#ff2299'; ctx.beginPath(); ctx.arc(btx,bty,3.5,0,Math.PI*2); ctx.fill();
+
+  // === PINK DRESS with flowers ===
+  // Skirt (puffy, light pink)
+  ctx.fillStyle='#ffaad4';
+  ctx.beginPath(); ctx.ellipse(0,-17,21,17,0,0,Math.PI*2); ctx.fill();
+  // Skirt highlight
+  ctx.fillStyle='rgba(255,255,255,.28)';
+  ctx.beginPath(); ctx.ellipse(-5,-22,12,8,-0.2,0,Math.PI*2); ctx.fill();
+
+  // Bodice
+  ctx.fillStyle='#ff88bb';
+  ctx.beginPath(); ctx.roundRect(-12,-40,24,26,8); ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,.3)';
+  ctx.beginPath(); ctx.roundRect(-10,-38,14,10,5); ctx.fill();
+
+  // Flowers on dress (inline helper)
+  function petal(fx,fy,r){ for(let p=0;p<5;p++){ const a=(p/5)*Math.PI*2; ctx.beginPath(); ctx.ellipse(fx+Math.cos(a)*r*1.1,fy+Math.sin(a)*r*1.1,r*.8,r*.5,a,0,Math.PI*2); ctx.fill(); } }
+  ctx.fillStyle='#fff'; petal(-10,-24,4); petal(7,-27,4); petal(-3,-13,4); petal(10,-19,3.5); petal(-7,-33,3); petal(5,-35,3);
+  ctx.fillStyle='#ffee44';
+  [[-10,-24],[7,-27],[-3,-13],[10,-19],[-7,-33],[5,-35]].forEach(([fx,fy])=>{
+    ctx.beginPath(); ctx.arc(fx,fy,2,0,Math.PI*2); ctx.fill();
+  });
+
+  // Arms
+  ctx.strokeStyle='#f8c090'; ctx.lineWidth=6; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(10,-30); ctx.quadraticCurveTo(20,-23,30,-17); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(4,-30); ctx.quadraticCurveTo(14,-21,24,-15); ctx.stroke();
+
+  // === HEAD (big & round, kawaii) ===
+  ctx.fillStyle='#ffd0a8';
+  ctx.beginPath(); ctx.arc(1,-52,20,0,Math.PI*2); ctx.fill();
+
+  // Hair back (pastel purple)
+  ctx.fillStyle='#bb55ee';
+  ctx.beginPath(); ctx.arc(1,-52,22,Math.PI*.18,Math.PI*.82); ctx.fill();
+  // Crown
+  ctx.fillStyle='#cc66ff';
+  ctx.beginPath(); ctx.ellipse(1,-66,15,9,0,0,Math.PI*2); ctx.fill();
+  // Bangs
+  ctx.fillStyle='#cc66ff';
+  [[-8,-55,8.5],[1,-57,7.5],[11,-55,6.5]].forEach(([bx,by,br])=>{
+    ctx.beginPath(); ctx.arc(bx,by,br,Math.PI*1.35,0,false); ctx.fill();
+  });
+  // Hair shimmer
+  ctx.fillStyle='rgba(240,180,255,.5)';
+  ctx.beginPath(); ctx.ellipse(-3,-69,7,3,0.2,0,Math.PI*2); ctx.fill();
+
+  // Hair bow (cute pink bow on top-left)
+  ctx.fillStyle='#ff66aa';
+  ctx.beginPath(); ctx.ellipse(-12,-67,9,6,-0.35,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(-2,-68,9,6,0.35,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#ff1188'; ctx.beginPath(); ctx.arc(-7,-68,3.5,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='rgba(255,180,220,.6)'; ctx.beginPath(); ctx.arc(-10,-69,2,0,Math.PI*2); ctx.fill();
+
+  // Big rosy cheeks
+  ctx.fillStyle='rgba(255,120,160,.38)';
+  ctx.beginPath(); ctx.ellipse(-9,-50,9,6,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(11,-50,9,6,0,0,Math.PI*2); ctx.fill();
+
+  // === BIG KAWAII EYES ===
+  // Eye whites (large ovals)
+  ctx.fillStyle='#fff';
+  ctx.beginPath(); ctx.ellipse(-7,-54,9,10,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(10,-54,9,10,0,0,Math.PI*2); ctx.fill();
+  // Top eyelid
+  ctx.strokeStyle='#220011'; ctx.lineWidth=2.2; ctx.lineCap='round';
+  ctx.beginPath(); ctx.arc(-7,-54,9,Math.PI+.3,-0.3); ctx.stroke();
+  ctx.beginPath(); ctx.arc(10,-54,9,Math.PI+.3,-0.3); ctx.stroke();
+  // Iris (bright violet)
+  ctx.fillStyle='#9933ff';
+  ctx.beginPath(); ctx.ellipse(-7,-54,6.5,7.5,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(10,-54,6.5,7.5,0,0,Math.PI*2); ctx.fill();
+  // Pupil
+  ctx.fillStyle='#110022';
+  ctx.beginPath(); ctx.ellipse(-7,-54,3.5,4.5,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(10,-54,3.5,4.5,0,0,Math.PI*2); ctx.fill();
+  // Big shine spots
+  ctx.fillStyle='#fff';
+  ctx.beginPath(); ctx.ellipse(-9.5,-56.5,2.8,2.2,-0.4,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(7.5,-56.5,2.8,2.2,-0.4,0,Math.PI*2); ctx.fill();
+  // Small secondary shine
+  ctx.beginPath(); ctx.arc(-4.5,-52,1.2,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(12.5,-52,1.2,0,Math.PI*2); ctx.fill();
+  // Star sparkle on eyes
+  ctx.fillStyle='rgba(255,255,255,.7)';
+  ctx.beginPath(); ctx.arc(-5.5,-57.5,1,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(11.5,-57.5,1,0,Math.PI*2); ctx.fill();
+  // Cute top lashes (3 per eye, curving upward)
+  ctx.strokeStyle='#220011'; ctx.lineWidth=1.8; ctx.lineCap='round';
+  [[-14,-61],[-7,-63],[-1,-61]].forEach(([ex,ey])=>{
+    ctx.beginPath(); ctx.moveTo(ex+5,-55); ctx.quadraticCurveTo(ex+3,-58,ex,ey); ctx.stroke();
+  });
+  [[4,-61],[10,-63],[17,-61]].forEach(([ex,ey])=>{
+    ctx.beginPath(); ctx.moveTo(ex+2,-55); ctx.quadraticCurveTo(ex+1,-58,ex,ey); ctx.stroke();
+  });
+
+  // Tiny dot nose
+  ctx.fillStyle='rgba(210,110,100,.55)';
+  ctx.beginPath(); ctx.ellipse(1,-45,3.5,2,0,0,Math.PI*2); ctx.fill();
+
+  // Big happy smile (filled arc)
+  ctx.fillStyle='#cc2244';
+  ctx.beginPath(); ctx.arc(1,-42,8,0.15,Math.PI-0.15); ctx.fill();
+  // Inner mouth (lighter pink)
+  ctx.fillStyle='#ff6688';
+  ctx.beginPath(); ctx.arc(1,-42,5,0.3,Math.PI-0.3); ctx.fill();
+  // Tooth line
+  ctx.strokeStyle='#fff'; ctx.lineWidth=1.8;
+  ctx.beginPath(); ctx.moveTo(-5,-42); ctx.lineTo(7,-42); ctx.stroke();
+
+  // Hit flash
+  if (hitFlash>0) {
+    ctx.fillStyle=`rgba(255,40,40,${hitFlash/22*.5})`;
+    ctx.beginPath(); ctx.arc(1,-52,32,0,Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+// ── Character Select Screen ───────────────────────────────────────
+function drawCharSelect() {
+  drawBG();
+
+  // Title
+  ctx.textAlign='center'; ctx.shadowColor='#ffe44d'; ctx.shadowBlur=22;
+  ctx.fillStyle='#ffe44d'; ctx.font='bold 46px "Comic Sans MS",cursive';
+  ctx.fillText('Choose Your Hero!', W/2, 72); ctx.shadowBlur=0;
+
+  const cards=[
+    {char:'boy',  cx:228, label:'Scooter Boy',
+     weapons:['⚾ Baseball','🔴 Laser','🌋 Lava Spray','⚡ Lightning Sword']},
+    {char:'girl', cx:672, label:'Unicorn Girl',
+     weapons:['🌈 Rainbow Blast','🫧 Blowing Bubbles']},
+  ];
+
+  cards.forEach(card=>{
+    const sel=selectedChar===card.char;
+    const cardX=card.cx-175;
+
+    ctx.save();
+    if (!sel) ctx.globalAlpha=.52;
+
+    // Card bg
+    ctx.fillStyle='rgba(18,10,48,.96)';
+    ctx.beginPath(); ctx.roundRect(cardX,90,350,378,18); ctx.fill();
+    // Border
+    ctx.strokeStyle=sel?'#ffe44d':'rgba(120,80,200,.55)';
+    ctx.lineWidth=sel?3:1.5;
+    if (sel) { ctx.shadowColor='#ffe44d'; ctx.shadowBlur=24; }
+    ctx.beginPath(); ctx.roundRect(cardX,90,350,378,18); ctx.stroke();
+    ctx.shadowBlur=0;
+
+    // Character preview (animated)
+    ctx.save(); ctx.translate(card.cx,255);
+    if (card.char==='boy') {
+      ctx.scale(.76,.76); drawPlayerAt(0,0,0,0);
+    } else {
+      ctx.scale(.50,.50); drawUnicornGirlAt(0,0,0,0);
+    }
+    ctx.restore();
+
+    // Name
+    ctx.fillStyle=sel?'#ffe44d':'#bbb'; ctx.textAlign='center';
+    ctx.font='bold 26px "Comic Sans MS",cursive';
+    ctx.fillText(card.label, card.cx, 342);
+
+    // Weapons label
+    ctx.fillStyle=sel?'#aaddff':'#779'; ctx.font='13px "Comic Sans MS",cursive';
+    ctx.fillText('WEAPONS:', card.cx, 366);
+    ctx.fillStyle=sel?'#fff':'#aaa'; ctx.font='16px "Comic Sans MS",cursive';
+    card.weapons.forEach((w,i) => ctx.fillText(w, card.cx, 388+i*26));
+
+    ctx.restore();
+  });
+
+  // Arrow indicator above selected card
+  const arrowX=selectedChar==='boy'?228:672;
+  ctx.save(); ctx.globalAlpha=.7+.3*Math.sin(frame*.1);
+  ctx.fillStyle='#ffe44d'; ctx.font='26px serif'; ctx.textAlign='center';
+  ctx.fillText('▼', arrowX, 87); ctx.restore();
+
+  // Controls
+  ctx.textAlign='center'; ctx.fillStyle='#aaddff';
+  ctx.font='17px "Comic Sans MS",cursive';
+  ctx.fillText('Arrow Keys  ←  →  to choose', W/2, 494);
+  ctx.save(); ctx.globalAlpha=.7+.3*Math.sin(frame*.08+1);
+  ctx.fillStyle='#ffe44d'; ctx.font='bold 26px "Comic Sans MS",cursive';
+  ctx.fillText('Press SPACE to Play!', W/2, 530);
+  ctx.restore();
 }
 
 // ── Update ────────────────────────────────────────────────────────
@@ -837,6 +1173,7 @@ function update() {
     p.x+=p.vx; p.y+=p.vy;
     if (p.type==='baseball') { p.spin+=.18; p.y-=p.vy; } // baseball has no vertical drift
     if (p.type==='lava') { p.vy+=.22; p.vx*=.985; p.life--; }
+    if (p.type==='bubble') { p.y+=Math.sin(frame*.08+p.wobble)*.8; }
   });
 
   // projectile vs enemy
@@ -896,7 +1233,7 @@ function update() {
 
 // ── Main Loop ─────────────────────────────────────────────────────
 function loop() {
-  if (gstate==='start') { drawTitle(); }
+  if (gstate==='charselect') { update(); drawCharSelect(); }
   else if (gstate==='gameover') { update(); drawGameOver(); }
   else {
     update();
