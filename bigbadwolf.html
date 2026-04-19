@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Big Bad Wolf!</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #000010;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+      touch-action: none;
+    }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// ================================================================
+//  BIG BAD WOLF  –  save the stars from the Big Bad Wolf!
+// ================================================================
+const canvas = document.getElementById('game');
+const ctx    = canvas.getContext('2d');
+const W = canvas.width  = 900;
+const H = canvas.height = 560;
+
+// ── Audio ─────────────────────────────────────────────────────────
+let audioCtx;
+function initAudio() { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+function beep(type) {
+  if (!audioCtx) return;
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.connect(g); g.connect(audioCtx.destination);
+  const t = audioCtx.currentTime;
+  if (type === 'baseball') {
+    o.type = 'square';
+    o.frequency.setValueAtTime(280, t);
+    o.frequency.exponentialRampToValueAtTime(120, t + .1);
+    g.gain.setValueAtTime(.14, t); g.gain.exponentialRampToValueAtTime(.001, t + .13);
+    o.start(t); o.stop(t + .15);
+  } else if (type === 'laser') {
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(900, t);
+    o.frequency.exponentialRampToValueAtTime(180, t + .07);
+    g.gain.setValueAtTime(.08, t); g.gain.exponentialRampToValueAtTime(.001, t + .09);
+    o.start(t); o.stop(t + .1);
+  } else if (type === 'boom') {
+    o.type = 'triangle';
+    o.frequency.setValueAtTime(380, t);
+    o.frequency.setValueAtTime(550, t + .05);
+    o.frequency.setValueAtTime(220, t + .1);
+    g.gain.setValueAtTime(.22, t); g.gain.exponentialRampToValueAtTime(.001, t + .28);
+    o.start(t); o.stop(t + .3);
+  } else if (type === 'ouch') {
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(140, t);
+    o.frequency.exponentialRampToValueAtTime(70, t + .3);
+    g.gain.setValueAtTime(.28, t); g.gain.exponentialRampToValueAtTime(.001, t + .35);
+    o.start(t); o.stop(t + .4);
+  } else if (type === 'start') {
+    [261,329,392,523].forEach((hz, i) => {
+      const o2 = audioCtx.createOscillator(), g2 = audioCtx.createGain();
+      o2.connect(g2); g2.connect(audioCtx.destination);
+      o2.type = 'square'; o2.frequency.value = hz;
+      const s = t + i*.1;
+      g2.gain.setValueAtTime(0,s); g2.gain.linearRampToValueAtTime(.12, s+.04);
+      g2.gain.exponentialRampToValueAtTime(.001, s+.18);
+      o2.start(s); o2.stop(s+.22);
+    });
+  }
+}
+
+// ── Stars & Planets ───────────────────────────────────────────────
+const STARS = Array.from({length:130}, () => ({
+  x: Math.random()*W, y: Math.random()*H,
+  r: Math.random()*2+.4, speed: Math.random()*1.4+.2,
+  tw: Math.random()*Math.PI*2
+}));
+const PLANETS = [
+  { x:680, y:90,  r:44, col:'#c07855', ring:true  },
+  { x:180, y:430, r:22, col:'#5599cc', ring:false },
+  { x:800, y:320, r:16, col:'#88cc66', ring:false },
+];
+
+// ── Game State ────────────────────────────────────────────────────
+let gstate = 'start';  // start | playing | gameover
+let score=0, hiScore=0, lives=5, frame=0;
+let weapon = 'baseball';  // baseball | laser
+let shootCD = 0, spawnTimer = 0, diff = 1, diffTimer = 0;
+
+const player = { x:110, y:H/2, speed:4.8, invincible:0, hitFlash:0 };
+
+let projectiles=[], enemies=[], particles=[], floats=[];
+
+// ── Input ─────────────────────────────────────────────────────────
+const keys = {};
+document.addEventListener('keydown', e => {
+  const fresh = !keys[e.code];
+  keys[e.code] = true;
+  if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault();
+  if (e.code==='Digit1') switchWeapon('baseball');
+  if (e.code==='Digit2') switchWeapon('laser');
+  if (fresh && (e.code==='Space'||e.code==='Enter') && gstate!=='playing') {
+    initAudio(); startGame();
+  }
+});
+document.addEventListener('keyup', e => { keys[e.code]=false; });
+
+// Touch: move toward touch Y, auto-shoot
+let touchY = null;
+canvas.addEventListener('touchstart', e => { e.preventDefault(); initAudio(); touchY = e.touches[0].clientY - canvas.getBoundingClientRect().top; if (gstate!=='playing') startGame(); }, {passive:false});
+canvas.addEventListener('touchmove',  e => { e.preventDefault(); touchY = e.touches[0].clientY - canvas.getBoundingClientRect().top; }, {passive:false});
+canvas.addEventListener('touchend',   e => { touchY = null; });
+
+function switchWeapon(w) {
+  weapon = w;
+  spawnFloat(player.x+50, player.y-50, w==='baseball'?'⚾ Baseball!':'🔴 Laser!', '#ffe44d', 40);
+}
+
+// ── Start / Reset ─────────────────────────────────────────────────
+function startGame() {
+  score=0; lives=5; frame=0; diff=1; diffTimer=0;
+  weapon='baseball'; shootCD=0; spawnTimer=0;
+  player.x=110; player.y=H/2; player.invincible=0; player.hitFlash=0;
+  projectiles=[]; enemies=[]; particles=[]; floats=[];
+  gstate='playing';
+  beep('start');
+}
+
+// ── Shoot ─────────────────────────────────────────────────────────
+function shoot() {
+  if (gstate!=='playing' || shootCD>0) return;
+  const cx = player.x+38, cy = player.y-5;
+  if (weapon==='baseball') {
+    projectiles.push({type:'baseball', x:cx, y:cy, vx:12, vy:0, r:13, spin:0});
+    shootCD=18; beep('baseball');
+  } else {
+    [-9,9].forEach(dy => projectiles.push({type:'laser', x:cx, y:cy+dy, vx:20, vy:0, w:40, h:5}));
+    shootCD=7; beep('laser');
+  }
+}
+
+// ── Spawn Enemy ───────────────────────────────────────────────────
+function spawnEnemy() {
+  let pool = ['grunt','grunt','grunt','dancer'];
+  if (diff>=2) pool.push('dancer','bigbad');
+  if (diff>=3) pool.push('bigbad','bigbad');
+  const type = pool[Math.floor(Math.random()*pool.length)];
+  const y = 70 + Math.random()*(H-140);
+  const e = { type, x:W+80, y, hitFlash:0, phase:Math.random()*Math.PI*2 };
+  if (type==='grunt') {
+    Object.assign(e, {hp:1, maxHp:1, vx:-(1.4+Math.random()*.4+diff*.18)});
+  } else if (type==='dancer') {
+    Object.assign(e, {hp:1, maxHp:1, vx:-(1.7+Math.random()*.4+diff*.18), amp:1.8+Math.random()*1.4});
+  } else {
+    Object.assign(e, {hp:3, maxHp:3, vx:-(1.0+diff*.12)});
+  }
+  enemies.push(e);
+}
+
+// ── Particles ─────────────────────────────────────────────────────
+function burst(x, y, c1, c2, n) {
+  for (let i=0;i<n;i++) {
+    const a=Math.random()*Math.PI*2, sp=2+Math.random()*5;
+    particles.push({x, y, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp,
+      r:3+Math.random()*6, life:40+Math.random()*20, maxLife:60,
+      color:Math.random()>.5?c1:c2, star:Math.random()>.4});
+  }
+}
+function spawnFloat(x, y, txt, col, life) {
+  floats.push({x, y, txt, col, life, maxLife:life});
+}
+
+// ── Draw Helpers ──────────────────────────────────────────────────
+function drawStar5(x, y, ro, ri) {
+  ctx.beginPath();
+  for (let i=0;i<10;i++) {
+    const a = (i*Math.PI/5) - Math.PI/2;
+    const r = i%2===0 ? ro : ri;
+    i===0 ? ctx.moveTo(x+Math.cos(a)*r, y+Math.sin(a)*r)
+           : ctx.lineTo(x+Math.cos(a)*r, y+Math.sin(a)*r);
+  }
+  ctx.closePath(); ctx.fill();
+}
+
+function wheel(wx, wy, r) {
+  ctx.fillStyle='#222'; ctx.beginPath(); ctx.arc(wx,wy,r,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#777'; ctx.beginPath(); ctx.arc(wx,wy,r*.65,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#bbb'; ctx.beginPath(); ctx.arc(wx,wy,r*.28,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle='#999'; ctx.lineWidth=1.5;
+  for (let i=0;i<4;i++) {
+    const a = frame*.06+i*Math.PI/2;
+    ctx.beginPath();
+    ctx.moveTo(wx+Math.cos(a)*r*.28, wy+Math.sin(a)*r*.28);
+    ctx.lineTo(wx+Math.cos(a)*r*.65, wy+Math.sin(a)*r*.65);
+    ctx.stroke();
+  }
+}
+
+// ── Draw Background ───────────────────────────────────────────────
+function drawBG() {
+  const g = ctx.createLinearGradient(0,0,W,0);
+  g.addColorStop(0,'#040418'); g.addColorStop(1,'#000408');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+
+  PLANETS.forEach(p => {
+    ctx.save(); ctx.translate(p.x, p.y);
+    if (p.ring) {
+      ctx.save(); ctx.scale(1.9,.38);
+      ctx.strokeStyle='rgba(160,100,70,.45)'; ctx.lineWidth=8;
+      ctx.beginPath(); ctx.arc(0,0,p.r*1.5,0,Math.PI*2); ctx.stroke();
+      ctx.restore();
+    }
+    ctx.globalAlpha=.28; ctx.fillStyle=p.col;
+    ctx.beginPath(); ctx.arc(0,0,p.r,0,Math.PI*2); ctx.fill();
+    ctx.globalAlpha=1; ctx.restore();
+  });
+
+  STARS.forEach(s => {
+    const a = .45+.45*Math.sin(frame*.025+s.tw);
+    ctx.fillStyle=`rgba(255,255,255,${a})`;
+    ctx.beginPath(); ctx.arc(s.x,s.y,s.r,0,Math.PI*2); ctx.fill();
+  });
+}
+
+// ── Draw Player: boy on red kick scooter ──────────────────────────
+function drawPlayer() {
+  const {x, y, invincible, hitFlash} = player;
+  if (invincible>0 && Math.floor(frame/5)%2===0) return;
+
+  ctx.save(); ctx.translate(x, y);
+
+  // shadow
+  ctx.fillStyle='rgba(0,0,0,.13)'; ctx.beginPath();
+  ctx.ellipse(5, 38, 36, 8, 0, 0, Math.PI*2); ctx.fill();
+
+  // wheels
+  wheel(-22, 27, 11);
+  wheel( 24, 27, 11);
+
+  // deck
+  ctx.fillStyle='#cc1111';
+  ctx.beginPath(); ctx.roundRect(-30,15,60,11,5); ctx.fill();
+  ctx.fillStyle='#ff4444';
+  ctx.beginPath(); ctx.roundRect(-28,16,55,4,3); ctx.fill();
+  // grip tape dots
+  ctx.fillStyle='#990000';
+  for (let i=-22;i<24;i+=8) { ctx.fillRect(i,18,5,3); }
+
+  // fork
+  ctx.strokeStyle='#bb0000'; ctx.lineWidth=3; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(24,14); ctx.lineTo(20,1); ctx.stroke();
+
+  // handlebar stem
+  ctx.strokeStyle='#cc2222'; ctx.lineWidth=5;
+  ctx.beginPath(); ctx.moveTo(20,14); ctx.lineTo(16,-23); ctx.stroke();
+
+  // handlebar
+  ctx.strokeStyle='#aaa'; ctx.lineWidth=5;
+  ctx.beginPath(); ctx.moveTo(2,-23); ctx.lineTo(30,-23); ctx.stroke();
+  ctx.fillStyle='#111';
+  ctx.beginPath(); ctx.arc(2,-23,5,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(30,-23,5,0,Math.PI*2); ctx.fill();
+
+  // back leg (kicking)
+  ctx.strokeStyle='#2255aa'; ctx.lineWidth=7;
+  ctx.beginPath(); ctx.moveTo(-3,14); ctx.lineTo(-12,26); ctx.stroke();
+  ctx.fillStyle='#bb2200';
+  ctx.beginPath(); ctx.ellipse(-15,28,9,4,.15,0,Math.PI*2); ctx.fill();
+
+  // front leg (on deck)
+  ctx.strokeStyle='#2255aa'; ctx.lineWidth=7;
+  ctx.beginPath(); ctx.moveTo(6,14); ctx.lineTo(6,27); ctx.stroke();
+  ctx.fillStyle='#bb2200';
+  ctx.beginPath(); ctx.ellipse(6,29,9,4,0,0,Math.PI*2); ctx.fill();
+
+  // body (blue shirt)
+  ctx.fillStyle='#2266dd';
+  ctx.beginPath(); ctx.roundRect(-4,-9,24,24,5); ctx.fill();
+  ctx.fillStyle='#44aaff';
+  ctx.beginPath(); ctx.roundRect(-3,-7,22,5,3); ctx.fill();
+
+  // arms to handlebar
+  ctx.strokeStyle='#f8c090'; ctx.lineWidth=6; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(14,1); ctx.quadraticCurveTo(20,-10,26,-20); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(8,1); ctx.quadraticCurveTo(16,-10,22,-20); ctx.stroke();
+
+  // neck
+  ctx.fillStyle='#f8c090';
+  ctx.beginPath(); ctx.roundRect(4,-15,9,8,3); ctx.fill();
+
+  // head
+  ctx.fillStyle='#f8c090';
+  ctx.beginPath(); ctx.arc(8,-26,17,0,Math.PI*2); ctx.fill();
+
+  // blond hair – back
+  ctx.fillStyle='#d4a410';
+  ctx.beginPath(); ctx.arc(8,-26,19,Math.PI*.1,Math.PI*.9); ctx.fill();
+  // top/crown
+  ctx.fillStyle='#f5c518';
+  ctx.beginPath(); ctx.ellipse(8,-38,14,8,0,0,Math.PI*2); ctx.fill();
+  // bangs
+  [[-2,-27,8],[ 8,-28,7],[18,-27,6]].forEach(([bx,by,br]) => {
+    ctx.beginPath(); ctx.arc(bx,by,br,Math.PI*1.4,0,false); ctx.fill();
+  });
+
+  // cheeks
+  ctx.fillStyle='rgba(255,140,110,.38)';
+  ctx.beginPath(); ctx.arc(-1,-23,5,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(17,-23,5,0,Math.PI*2); ctx.fill();
+
+  // eye whites
+  ctx.fillStyle='#fff';
+  ctx.beginPath(); ctx.ellipse(2,-26,5.5,6,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(14,-26,5.5,6,0,0,Math.PI*2); ctx.fill();
+  // pupils
+  ctx.fillStyle='#1a0f00';
+  ctx.beginPath(); ctx.arc(3,-25,3,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(15,-25,3,0,Math.PI*2); ctx.fill();
+  // shine
+  ctx.fillStyle='#fff';
+  ctx.beginPath(); ctx.arc(4,-26,1.3,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(16,-26,1.3,0,Math.PI*2); ctx.fill();
+
+  // nose
+  ctx.fillStyle='#e09070';
+  ctx.beginPath(); ctx.ellipse(8,-20,3.5,2.5,0,0,Math.PI*2); ctx.fill();
+
+  // open smile / mouth
+  ctx.fillStyle='#c04428';
+  ctx.beginPath(); ctx.arc(8,-17,7,0,Math.PI); ctx.fill();
+  ctx.fillStyle='#ff8866';
+  ctx.beginPath(); ctx.arc(8,-16,5,0,Math.PI); ctx.fill();
+  ctx.fillStyle='#fff';
+  ctx.fillRect(4,-17,4,3); ctx.fillRect(10,-17,4,3);
+
+  // hit flash
+  if (hitFlash>0) {
+    ctx.fillStyle=`rgba(255,40,40,${hitFlash/20*.5})`;
+    ctx.beginPath(); ctx.arc(8,-26,28,0,Math.PI*2); ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+// ── Draw Wolf ─────────────────────────────────────────────────────
+function drawWolf(e) {
+  ctx.save(); ctx.translate(e.x, e.y);
+  if (e.hitFlash>0) ctx.filter='brightness(4) saturate(0)';
+
+  const sc = e.type==='bigbad' ? 1.42 : 1;
+  ctx.scale(sc, sc);
+
+  // shadow
+  ctx.filter='none';
+  ctx.fillStyle='rgba(0,0,0,.12)';
+  ctx.beginPath(); ctx.ellipse(0,32,26,7,0,0,Math.PI*2); ctx.fill();
+  if (e.hitFlash>0) ctx.filter='brightness(4) saturate(0)';
+
+  const mc = e.type==='bigbad' ? '#55566a' : e.type==='dancer' ? '#8b6040' : '#888898';
+  const dk = e.type==='bigbad' ? '#333348' : e.type==='dancer' ? '#6b4025' : '#666676';
+  const lt = e.type==='bigbad' ? '#9898b0' : e.type==='dancer' ? '#b08862' : '#aaaabe';
+
+  // body
+  ctx.fillStyle=mc; ctx.beginPath(); ctx.ellipse(0,8,20,25,0,0,Math.PI*2); ctx.fill();
+  // belly
+  ctx.fillStyle=lt; ctx.beginPath(); ctx.ellipse(0,10,12,17,0,0,Math.PI*2); ctx.fill();
+
+  // legs
+  for (const side of [-1,1]) {
+    ctx.save(); ctx.translate(side*9, 25);
+    ctx.rotate(side * Math.sin(frame*.14+e.phase)*.25);
+    ctx.fillStyle=mc; ctx.beginPath(); ctx.ellipse(0,8,6,11,side*.1,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=dk; ctx.beginPath(); ctx.ellipse(side*3,17,7,4,side*.2,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+
+  // arms
+  for (const side of [-1,1]) {
+    ctx.save(); ctx.translate(side*18, 0);
+    ctx.rotate(side * Math.sin(frame*.1+e.phase) * .2);
+    ctx.fillStyle=mc; ctx.beginPath(); ctx.ellipse(0,5,7,14,side*.25,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=dk;
+    for (let ci=-1;ci<=1;ci++) {
+      ctx.beginPath(); ctx.ellipse(ci*4,17,2.5,5,ci*.3,0,Math.PI*2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // tail
+  ctx.save(); ctx.translate(14,4);
+  ctx.rotate(Math.sin(frame*.11+e.phase)*.4+.5);
+  ctx.fillStyle=lt; ctx.beginPath(); ctx.ellipse(8,-5,6,18,.6,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#e8e8e8'; ctx.beginPath(); ctx.ellipse(14,-15,7,8,.8,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+
+  // head
+  ctx.fillStyle=mc; ctx.beginPath(); ctx.arc(0,-22,22,0,Math.PI*2); ctx.fill();
+
+  // ears
+  [[-14,-38,-24,-56,-4,-42],[14,-38,24,-56,4,-42]].forEach(([x1,y1,x2,y2,x3,y3]) => {
+    ctx.fillStyle=mc; ctx.beginPath();
+    ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.lineTo(x3,y3); ctx.closePath(); ctx.fill();
+    ctx.fillStyle='#ff8080'; ctx.beginPath();
+    ctx.moveTo(x1,y1-2); ctx.lineTo(x2*.88,y2*.95); ctx.lineTo(x3*.7,y3); ctx.closePath(); ctx.fill();
+  });
+
+  // snout
+  ctx.fillStyle=lt; ctx.beginPath(); ctx.ellipse(-1,-15,14,10,0,0,Math.PI*2); ctx.fill();
+  // nose
+  ctx.fillStyle='#111'; ctx.beginPath(); ctx.ellipse(-1,-19,7,5,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#555'; ctx.beginPath(); ctx.ellipse(-3,-20,2.5,1.5,-.3,0,Math.PI*2); ctx.fill();
+
+  // eyes (yellow, menacing)
+  ctx.fillStyle='#ffee00';
+  ctx.beginPath(); ctx.ellipse(-11,-27,6,7,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse( 9,-27,6,7,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#111';
+  ctx.beginPath(); ctx.ellipse(-11,-27,2.5,6,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(  9,-27,2.5,6,0,0,Math.PI*2); ctx.fill();
+
+  // angry brows
+  ctx.strokeStyle=dk; ctx.lineWidth=3; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(-17,-34); ctx.lineTo(-5,-31); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo( 15,-34); ctx.lineTo( 3,-31); ctx.stroke();
+
+  // mouth + teeth
+  ctx.fillStyle='#111';
+  ctx.beginPath(); ctx.arc(-1,-10,10,.12,Math.PI-.12); ctx.fill();
+  ctx.fillStyle='#fff';
+  for (let ti=-2;ti<=2;ti++) {
+    const tx=-1+ti*4;
+    ctx.beginPath(); ctx.moveTo(tx-1,-10); ctx.lineTo(tx-3,-4); ctx.lineTo(tx+3,-4); ctx.closePath(); ctx.fill();
+  }
+
+  // big-bad hat (top hat = boss indicator)
+  if (e.type==='bigbad') {
+    ctx.fillStyle='#181818';
+    ctx.beginPath(); ctx.ellipse(0,-44,18,5,0,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.roundRect(-10,-65,20,23,2); ctx.fill();
+    ctx.fillStyle='#cc0022'; ctx.fillRect(-10,-47,20,3);
+  }
+
+  // dancer: party hat
+  if (e.type==='dancer') {
+    ctx.fillStyle='#220055';
+    ctx.beginPath(); ctx.ellipse(0,-43,15,4,0,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#6611bb';
+    ctx.beginPath(); ctx.roundRect(-8,-59,16,17,2); ctx.fill();
+    ctx.fillStyle='#ff22aa'; ctx.fillRect(-8,-46,16,3);
+  }
+
+  // HP bar (bigbad only)
+  if (e.type==='bigbad') {
+    const bw=52, bh=7, bx=-26, by=38;
+    ctx.filter='none';
+    ctx.fillStyle='#400'; ctx.beginPath(); ctx.roundRect(bx,by,bw,bh,3); ctx.fill();
+    ctx.fillStyle='#f33'; ctx.beginPath(); ctx.roundRect(bx,by,bw*(e.hp/e.maxHp),bh,3); ctx.fill();
+    if (e.hitFlash>0) ctx.filter='brightness(4) saturate(0)';
+  }
+
+  ctx.filter='none'; ctx.restore();
+}
+
+// ── Draw Projectiles ──────────────────────────────────────────────
+function drawProjectile(p) {
+  ctx.save();
+  if (p.type==='baseball') {
+    ctx.translate(p.x, p.y); ctx.rotate(p.spin);
+    // ball
+    ctx.fillStyle='#fffdf5'; ctx.beginPath(); ctx.arc(0,0,p.r,0,Math.PI*2); ctx.fill();
+    // seams
+    ctx.strokeStyle='#cc2222'; ctx.lineWidth=1.8;
+    ctx.beginPath(); ctx.moveTo(-p.r*.5,-p.r*.65); ctx.quadraticCurveTo(-p.r*.85,0,-p.r*.5,p.r*.65); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo( p.r*.5,-p.r*.65); ctx.quadraticCurveTo( p.r*.85,0, p.r*.5,p.r*.65); ctx.stroke();
+    for (let i=-2;i<=2;i++) {
+      const yy=i*p.r*.22;
+      ctx.beginPath();
+      ctx.moveTo(-p.r*.62,yy-p.r*.07); ctx.lineTo(-p.r*.42,yy+p.r*.07);
+      ctx.moveTo( p.r*.42,yy-p.r*.07); ctx.lineTo( p.r*.62,yy+p.r*.07);
+      ctx.stroke();
+    }
+    ctx.strokeStyle='rgba(200,200,200,.4)'; ctx.lineWidth=.8;
+    ctx.beginPath(); ctx.arc(0,0,p.r,0,Math.PI*2); ctx.stroke();
+  } else {
+    ctx.shadowColor='#00ffbb'; ctx.shadowBlur=14;
+    ctx.fillStyle='#00ffcc';
+    ctx.beginPath(); ctx.roundRect(p.x,p.y-p.h/2,p.w,p.h,p.h/2); ctx.fill();
+    ctx.shadowColor='#fff'; ctx.shadowBlur=4;
+    ctx.fillStyle='#ccffee';
+    ctx.beginPath(); ctx.roundRect(p.x,p.y-p.h/2+1,p.w,p.h-2,(p.h-2)/2); ctx.fill();
+    ctx.shadowBlur=0;
+  }
+  ctx.restore();
+}
+
+// ── Draw Particles ────────────────────────────────────────────────
+function drawParticles() {
+  particles.forEach(p => {
+    ctx.save(); ctx.globalAlpha=p.life/p.maxLife; ctx.fillStyle=p.color;
+    if (p.star) drawStar5(p.x, p.y, p.r, p.r*.45);
+    else { ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill(); }
+    ctx.restore();
+  });
+}
+
+// ── HUD ───────────────────────────────────────────────────────────
+function drawHUD() {
+  ctx.font='bold 26px "Comic Sans MS",cursive'; ctx.textAlign='left';
+  ctx.fillStyle='#fff'; ctx.fillText(`⭐ ${score}`, 14, 36);
+  ctx.font='15px "Comic Sans MS",cursive'; ctx.textAlign='center';
+  ctx.fillStyle='#ffdd44'; ctx.fillText(`Best: ${hiScore}`, W/2, 24);
+  for (let i=0;i<5;i++) {
+    ctx.font='27px serif'; ctx.textAlign='right';
+    ctx.fillText(i<lives?'❤️':'🖤', W-12-(4-i)*34, 38);
+  }
+  ctx.font='15px "Comic Sans MS",cursive'; ctx.textAlign='left';
+  ctx.fillStyle=weapon==='baseball'?'#ffe44d':'#00ffcc';
+  ctx.fillText(weapon==='baseball'?'⚾ Baseball  (press 2 for laser)':'🔴 Laser  (press 1 for baseball)', 14, H-12);
+}
+
+// ── Floating Score Text ───────────────────────────────────────────
+function drawFloats() {
+  floats.forEach(f => {
+    ctx.save(); ctx.globalAlpha=f.life/f.maxLife;
+    ctx.fillStyle=f.col; ctx.font='bold 22px "Comic Sans MS",cursive';
+    ctx.textAlign='center'; ctx.fillText(f.txt, f.x, f.y); ctx.restore();
+  });
+}
+
+// ── Screens ───────────────────────────────────────────────────────
+function drawTitle() {
+  drawBG();
+  // panel
+  ctx.fillStyle='rgba(2,2,30,.88)';
+  ctx.beginPath(); ctx.roundRect(W/2-300,H/2-200,600,400,22); ctx.fill();
+  ctx.strokeStyle='#4af'; ctx.lineWidth=3; ctx.stroke();
+
+  ctx.textAlign='center';
+  ctx.fillStyle='#ffe44d'; ctx.font='bold 54px "Comic Sans MS",cursive';
+  ctx.fillText('Big Bad Wolf!', W/2, H/2-130);
+  ctx.fillStyle='#88ddff'; ctx.font='bold 20px "Comic Sans MS",cursive';
+  ctx.fillText('Stop the Big Bad Wolves from reaching you!', W/2, H/2-90);
+
+  // mini player preview
+  ctx.save(); ctx.translate(W/2-130, H/2+30); ctx.scale(.75,.75);
+  drawPlayerAt(0,0,0,0);
+  ctx.restore();
+
+  ctx.fillStyle='#adf'; ctx.font='18px "Comic Sans MS",cursive';
+  ctx.textAlign='left';
+  const ix=W/2+30, iy=H/2-50;
+  [['Arrow Keys','Move around'],['SPACE','Shoot!'],['1','⚾ Switch to Baseball'],['2','🔴 Switch to Laser']].forEach(([k,v],i)=>{
+    ctx.fillStyle='#ffe44d'; ctx.fillText(k, ix, iy+i*38);
+    ctx.fillStyle='#adf';    ctx.fillText(v, ix+130, iy+i*38);
+  });
+
+  const pulse=.7+.3*Math.sin(frame*.08);
+  ctx.globalAlpha=pulse; ctx.fillStyle='#ffe44d'; ctx.textAlign='center';
+  ctx.font='bold 28px "Comic Sans MS",cursive';
+  ctx.fillText('Press SPACE to Play!', W/2, H/2+160);
+  ctx.globalAlpha=1;
+}
+
+function drawGameOver() {
+  drawBG();
+  ctx.fillStyle='rgba(0,0,18,.9)';
+  ctx.beginPath(); ctx.roundRect(W/2-250,H/2-160,500,320,20); ctx.fill();
+  ctx.strokeStyle='#f44'; ctx.lineWidth=3; ctx.stroke();
+  ctx.textAlign='center';
+  ctx.fillStyle='#f44'; ctx.font='bold 60px "Comic Sans MS",cursive';
+  ctx.fillText('Game Over!', W/2, H/2-80);
+  ctx.fillStyle='#fff'; ctx.font='bold 30px "Comic Sans MS",cursive';
+  ctx.fillText(`Score: ${score}`, W/2, H/2-20);
+  ctx.fillStyle='#ffe44d'; ctx.fillText(`Best: ${hiScore}`, W/2, H/2+28);
+  const pulse=.7+.3*Math.sin(frame*.08);
+  ctx.globalAlpha=pulse; ctx.fillStyle='#adf';
+  ctx.font='bold 24px "Comic Sans MS",cursive';
+  ctx.fillText('Press SPACE to Play Again!', W/2, H/2+110);
+  ctx.globalAlpha=1;
+}
+
+// Stateless player draw (used in title preview)
+function drawPlayerAt(x, y, inv, hf) {
+  const saved = {x:player.x, y:player.y, invincible:player.invincible, hitFlash:player.hitFlash};
+  player.x=x; player.y=y; player.invincible=inv; player.hitFlash=hf;
+  drawPlayer();
+  Object.assign(player, saved);
+}
+
+// ── Update ────────────────────────────────────────────────────────
+function update() {
+  frame++;
+
+  STARS.forEach(s => { s.x-=s.speed; if (s.x<-4) { s.x=W+4; s.y=Math.random()*H; } });
+
+  if (gstate!=='playing') return;
+
+  // difficulty ramp
+  if (++diffTimer>700) { diff=Math.min(5,diff+.35); diffTimer=0; }
+
+  // shoot
+  if (shootCD>0) shootCD--;
+  if (keys['Space']||touchY!==null) shoot();
+
+  // move
+  if (keys['ArrowUp']  ||keys['KeyW']) player.y-=player.speed;
+  if (keys['ArrowDown'] ||keys['KeyS']) player.y+=player.speed;
+  if (keys['ArrowLeft'] ||keys['KeyA']) player.x-=player.speed*.8;
+  if (keys['ArrowRight']||keys['KeyD']) player.x+=player.speed*.8;
+  // touch: chase touch Y
+  if (touchY!==null) {
+    const dy=touchY-player.y;
+    player.y+=Math.sign(dy)*Math.min(Math.abs(dy)*.1, player.speed);
+  }
+  player.x=Math.max(18, Math.min(W*.58, player.x));
+  player.y=Math.max(28, Math.min(H-60,  player.y));
+  if (player.invincible>0) player.invincible--;
+  if (player.hitFlash>0)   player.hitFlash--;
+
+  // spawn enemies
+  const interval=Math.max(38,100-diff*10);
+  if (++spawnTimer>=interval) { spawnEnemy(); spawnTimer=0; }
+
+  // update enemies
+  enemies.forEach(e => {
+    e.x+=e.vx;
+    if (e.type==='dancer') e.y+=Math.sin(frame*.05+e.phase)*e.amp;
+    e.y=Math.max(45,Math.min(H-55,e.y));
+    if (e.hitFlash>0) e.hitFlash--;
+  });
+
+  // update projectiles
+  projectiles.forEach(p => { p.x+=p.vx; if (p.type==='baseball') p.spin+=.18; });
+
+  // projectile vs enemy
+  projectiles=projectiles.filter(p=>{
+    if (p.x>W+60) return false;
+    let hit=false;
+    enemies=enemies.filter(e=>{
+      if (hit) return true;
+      const hr=e.type==='bigbad'?44:30;
+      if (Math.abs(p.x-e.x)<hr && Math.abs(p.y-e.y)<hr*1.2) {
+        e.hp--;  e.hitFlash=8;
+        if (e.hp<=0) {
+          const cols=e.type==='bigbad'?['#ff4','#f84','#fff','#f44']:['#fe4','#f8a','#8af','#fff'];
+          burst(e.x,e.y,cols[0],cols[1],e.type==='bigbad'?26:14);
+          burst(e.x,e.y,cols[2],cols[3],7);
+          const pts=e.type==='bigbad'?30:10;
+          score+=pts; if (score>hiScore) hiScore=score;
+          spawnFloat(e.x,e.y-45,`+${pts}`,'#ffe44d',45);
+          beep('boom'); hit=true; return false;
+        }
+        hit=true; return true;
+      }
+      return true;
+    });
+    return !hit;
+  });
+
+  // enemy vs player
+  if (player.invincible===0) {
+    enemies=enemies.filter(e=>{
+      if (Math.abs(e.x-player.x)<36 && Math.abs(e.y-player.y)<42) {
+        lives--; player.invincible=130; player.hitFlash=22;
+        burst(player.x,player.y,'#f44','#fa0',9);
+        beep('ouch');
+        if (lives<=0) { gstate='gameover'; burst(player.x,player.y,'#f44','#f80',30); }
+        return false;
+      }
+      return true;
+    });
+  }
+
+  enemies=enemies.filter(e=>e.x>-130);
+
+  // particles
+  particles.forEach(p=>{ p.x+=p.vx; p.y+=p.vy; p.vy+=.05; p.vx*=.96; p.vy*=.96; p.life--; p.r*=.98; });
+  particles=particles.filter(p=>p.life>0&&p.r>.3);
+
+  // floats
+  floats.forEach(f=>{ f.y-=.8; f.life--; });
+  floats=floats.filter(f=>f.life>0);
+}
+
+// ── Main Loop ─────────────────────────────────────────────────────
+function loop() {
+  if (gstate==='start') { drawTitle(); }
+  else if (gstate==='gameover') { update(); drawGameOver(); }
+  else {
+    update();
+    drawBG();
+    drawParticles();
+    enemies.forEach(drawWolf);
+    projectiles.forEach(drawProjectile);
+    drawPlayer();
+    drawFloats();
+    drawHUD();
+  }
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>
