@@ -49,6 +49,23 @@ function beep(type) {
     o.frequency.exponentialRampToValueAtTime(180, t + .07);
     g.gain.setValueAtTime(.08, t); g.gain.exponentialRampToValueAtTime(.001, t + .09);
     o.start(t); o.stop(t + .1);
+  } else if (type === 'lava') {
+    o.type = 'sine';
+    o.frequency.setValueAtTime(55, t);
+    o.frequency.linearRampToValueAtTime(130, t + .12);
+    o.frequency.linearRampToValueAtTime(50, t + .25);
+    g.gain.setValueAtTime(.3, t); g.gain.exponentialRampToValueAtTime(.001, t + .28);
+    o.start(t); o.stop(t + .3);
+  } else if (type === 'lightning') {
+    // crack + rumble
+    o.type='square'; o.frequency.setValueAtTime(200,t); o.frequency.exponentialRampToValueAtTime(60,t+.06);
+    g.gain.setValueAtTime(.22,t); g.gain.exponentialRampToValueAtTime(.001,t+.1);
+    o.start(t); o.stop(t+.12);
+    const o2=audioCtx.createOscillator(), g2=audioCtx.createGain();
+    o2.connect(g2); g2.connect(audioCtx.destination);
+    o2.type='sawtooth'; o2.frequency.setValueAtTime(500,t+.03); o2.frequency.exponentialRampToValueAtTime(80,t+.22);
+    g2.gain.setValueAtTime(0,t+.03); g2.gain.linearRampToValueAtTime(.18,t+.06); g2.gain.exponentialRampToValueAtTime(.001,t+.28);
+    o2.start(t+.03); o2.stop(t+.3);
   } else if (type === 'boom') {
     o.type = 'triangle';
     o.frequency.setValueAtTime(380, t);
@@ -90,12 +107,13 @@ const PLANETS = [
 // ── Game State ────────────────────────────────────────────────────
 let gstate = 'start';  // start | playing | gameover
 let score=0, hiScore=0, lives=5, frame=0;
-let weapon = 'baseball';  // baseball | laser
+let weapon = 'baseball';  // baseball | laser | lava
 let shootCD = 0, spawnTimer = 0, diff = 1, diffTimer = 0;
 
 const player = { x:110, y:H/2, speed:4.8, invincible:0, hitFlash:0 };
 
-let projectiles=[], enemies=[], particles=[], floats=[];
+let projectiles=[], enemies=[], particles=[], floats=[], lightnings=[];
+let swordAngle=-0.8, swordSwinging=0;
 
 // ── Input ─────────────────────────────────────────────────────────
 const keys = {};
@@ -105,6 +123,8 @@ document.addEventListener('keydown', e => {
   if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault();
   if (e.code==='Digit1') switchWeapon('baseball');
   if (e.code==='Digit2') switchWeapon('laser');
+  if (e.code==='Digit3') switchWeapon('lava');
+  if (e.code==='Digit4') switchWeapon('sword');
   if (fresh && (e.code==='Space'||e.code==='Enter') && gstate!=='playing') {
     initAudio(); startGame();
   }
@@ -119,7 +139,8 @@ canvas.addEventListener('touchend',   e => { touchY = null; });
 
 function switchWeapon(w) {
   weapon = w;
-  spawnFloat(player.x+50, player.y-50, w==='baseball'?'⚾ Baseball!':'🔴 Laser!', '#ffe44d', 40);
+  const labels = {baseball:'⚾ Baseball!', laser:'🔴 Laser!', lava:'🌋 Lava Spray!', sword:'⚡ Lightning Sword!'};
+  spawnFloat(player.x+50, player.y-50, labels[w], '#ffe44d', 40);
 }
 
 // ── Start / Reset ─────────────────────────────────────────────────
@@ -127,7 +148,8 @@ function startGame() {
   score=0; lives=5; frame=0; diff=1; diffTimer=0;
   weapon='baseball'; shootCD=0; spawnTimer=0;
   player.x=110; player.y=H/2; player.invincible=0; player.hitFlash=0;
-  projectiles=[]; enemies=[]; particles=[]; floats=[];
+  projectiles=[]; enemies=[]; particles=[]; floats=[]; lightnings=[];
+  swordAngle=-0.8; swordSwinging=0;
   gstate='playing';
   beep('start');
 }
@@ -139,9 +161,38 @@ function shoot() {
   if (weapon==='baseball') {
     projectiles.push({type:'baseball', x:cx, y:cy, vx:12, vy:0, r:13, spin:0});
     shootCD=18; beep('baseball');
-  } else {
+  } else if (weapon==='laser') {
     [-9,9].forEach(dy => projectiles.push({type:'laser', x:cx, y:cy+dy, vx:20, vy:0, w:40, h:5}));
     shootCD=7; beep('laser');
+  } else if (weapon==='lava') {
+    [-1,0,1].forEach(i => projectiles.push({
+      type:'lava', x:cx, y:cy+i*8,
+      vx:8+Math.random()*2, vy:i*1.4,
+      r:11+Math.random()*4, life:60, maxLife:60
+    }));
+    shootCD=15; beep('lava');
+  } else {
+    // sword: lightning strikes nearest enemy from sky
+    const target = enemies.length
+      ? enemies.reduce((b,e) => Math.abs(e.x-player.x)<Math.abs(b.x-player.x)?e:b)
+      : null;
+    const tx = target ? target.x : player.x+180+Math.random()*180;
+    const ty = target ? target.y : H/2+(Math.random()-.5)*160;
+    lightnings.push({x:tx, y:ty, segs:generateLightningPath(tx,ty), life:28, maxLife:28});
+    if (target) {
+      target.hp--; target.hitFlash=12;
+      if (target.hp<=0) {
+        const cols=target.type==='bigbad'?['#ff4','#f84','#fff','#f44']:['#fe4','#f8a','#8af','#fff'];
+        burst(target.x,target.y,cols[0],cols[1],target.type==='bigbad'?26:14);
+        burst(target.x,target.y,cols[2],cols[3],7);
+        const pts=target.type==='bigbad'?30:10;
+        score+=pts; if(score>hiScore) hiScore=score;
+        spawnFloat(target.x,target.y-45,`+${pts}`,'#ffe44d',45);
+        beep('boom');
+        enemies=enemies.filter(e=>e!==target);
+      }
+    }
+    swordSwinging=22; shootCD=32; beep('lightning');
   }
 }
 
@@ -345,7 +396,129 @@ function drawPlayer() {
     ctx.beginPath(); ctx.arc(8,-26,28,0,Math.PI*2); ctx.fill();
   }
 
+  // sword (when sword weapon equipped)
+  if (weapon==='sword') drawSwordOnPlayer();
+
   ctx.restore();
+}
+
+// ── Sword (drawn within player's translated context) ──────────────
+function drawSwordOnPlayer() {
+  ctx.save();
+  ctx.translate(30, -20);     // near front hand
+  ctx.rotate(swordAngle);
+
+  // electric glow when swinging
+  if (swordSwinging>0) {
+    ctx.shadowColor='#88ccff'; ctx.shadowBlur=18+swordSwinging;
+  }
+
+  // blade – long tapered steel
+  ctx.fillStyle='#c8dde8';
+  ctx.beginPath();
+  ctx.moveTo(0,-2.5); ctx.lineTo(72,-1); ctx.lineTo(75,0); ctx.lineTo(72,1); ctx.lineTo(0,2.5);
+  ctx.closePath(); ctx.fill();
+  // blade shine
+  ctx.fillStyle='rgba(255,255,255,.55)';
+  ctx.beginPath();
+  ctx.moveTo(3,-1.8); ctx.lineTo(70,-0.8); ctx.lineTo(70,0); ctx.lineTo(3,-0.3);
+  ctx.closePath(); ctx.fill();
+  // blade edge line
+  ctx.strokeStyle='#99aabb'; ctx.lineWidth=.8;
+  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(75,0); ctx.stroke();
+
+  ctx.shadowBlur=0;
+
+  // crossguard (gold)
+  ctx.fillStyle='#d4a800';
+  ctx.beginPath(); ctx.roundRect(-3,-11,6,22,2); ctx.fill();
+  ctx.fillStyle='#f8cc00';
+  ctx.beginPath(); ctx.roundRect(-2,-10,4,6,1); ctx.fill();
+  ctx.beginPath(); ctx.roundRect(-2,4,4,6,1); ctx.fill();
+
+  // grip (dark leather)
+  ctx.fillStyle='#4a2800';
+  ctx.beginPath(); ctx.roundRect(-20,-3.5,19,7,2); ctx.fill();
+  // grip wrapping
+  ctx.strokeStyle='#2a1400'; ctx.lineWidth=1.5;
+  for (let i=0;i<5;i++) {
+    ctx.beginPath(); ctx.moveTo(-18+i*4,-3.5); ctx.lineTo(-18+i*4,3.5); ctx.stroke();
+  }
+
+  // pommel (gold orb)
+  ctx.fillStyle='#d4a800';
+  ctx.beginPath(); ctx.arc(-20,0,6,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#ffee66';
+  ctx.beginPath(); ctx.arc(-21.5,-1.5,2.5,0,Math.PI*2); ctx.fill();
+
+  // spark at tip when swinging
+  if (swordSwinging>10) {
+    const sp=swordSwinging/22;
+    ctx.fillStyle=`rgba(180,220,255,${sp*.8})`;
+    ctx.shadowColor='#aaddff'; ctx.shadowBlur=12;
+    ctx.beginPath(); ctx.arc(75,0,5*sp,0,Math.PI*2); ctx.fill();
+    ctx.shadowBlur=0;
+  }
+
+  ctx.restore();
+}
+
+// ── Lightning Path & Draw ─────────────────────────────────────────
+function generateLightningPath(tx, ty) {
+  const segs=[{x:tx+(Math.random()-.5)*40, y:0}];
+  const steps=Math.max(5, Math.floor(ty/40));
+  for (let i=1;i<=steps;i++) {
+    const prog=i/steps;
+    const spread=55*(1-prog*.5);
+    segs.push({x:tx+(Math.random()-.5)*spread, y:ty*prog});
+  }
+  segs.push({x:tx, y:ty});
+  // one branch off a middle segment
+  const bi=Math.floor(segs.length/2);
+  const bsrc=segs[bi];
+  segs._branch=[
+    {x:bsrc.x, y:bsrc.y},
+    {x:bsrc.x+(Math.random()-.5)*40, y:bsrc.y+ty*.15},
+    {x:bsrc.x+(Math.random()-.3)*50, y:bsrc.y+ty*.28},
+  ];
+  return segs;
+}
+
+function drawLightnings() {
+  lightnings.forEach(bolt=>{
+    const a=bolt.life/bolt.maxLife;
+    ctx.save(); ctx.globalAlpha=a;
+
+    function strokeSegs(segs, lw, col, blur, sc) {
+      ctx.shadowColor=sc||col; ctx.shadowBlur=blur;
+      ctx.strokeStyle=col; ctx.lineWidth=lw; ctx.lineCap='round'; ctx.lineJoin='round';
+      ctx.beginPath();
+      segs.forEach((p,i)=>i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y));
+      ctx.stroke();
+    }
+    // outer glow
+    strokeSegs(bolt.segs, 6, 'rgba(100,180,255,.4)', 22, '#88ccff');
+    // mid
+    strokeSegs(bolt.segs, 3, '#aaddff', 10, '#ffffff');
+    // bright core
+    strokeSegs(bolt.segs, 1.5, '#ffffff', 4, '#ffffff');
+    // branch
+    if (bolt.segs._branch) {
+      ctx.globalAlpha=a*.6;
+      strokeSegs(bolt.segs._branch, 2, '#aaddff', 8, '#88ccff');
+      strokeSegs(bolt.segs._branch, 1, '#ffffff', 2, '#ffffff');
+    }
+    // impact flash at target
+    if (a>.5) {
+      ctx.globalAlpha=a*(a-.5)*2;
+      ctx.fillStyle='#cceeff';
+      ctx.shadowColor='#aaddff'; ctx.shadowBlur=30;
+      ctx.beginPath(); ctx.arc(bolt.x, bolt.y, 18*(a), 0, Math.PI*2); ctx.fill();
+      ctx.shadowBlur=0;
+    }
+
+    ctx.restore();
+  });
 }
 
 // ── Draw Wolf ─────────────────────────────────────────────────────
@@ -487,7 +660,7 @@ function drawProjectile(p) {
     }
     ctx.strokeStyle='rgba(200,200,200,.4)'; ctx.lineWidth=.8;
     ctx.beginPath(); ctx.arc(0,0,p.r,0,Math.PI*2); ctx.stroke();
-  } else {
+  } else if (p.type==='laser') {
     ctx.shadowColor='#00ffbb'; ctx.shadowBlur=14;
     ctx.fillStyle='#00ffcc';
     ctx.beginPath(); ctx.roundRect(p.x,p.y-p.h/2,p.w,p.h,p.h/2); ctx.fill();
@@ -495,6 +668,19 @@ function drawProjectile(p) {
     ctx.fillStyle='#ccffee';
     ctx.beginPath(); ctx.roundRect(p.x,p.y-p.h/2+1,p.w,p.h-2,(p.h-2)/2); ctx.fill();
     ctx.shadowBlur=0;
+  } else {
+    // lava blob
+    const fade = p.life/p.maxLife;
+    ctx.globalAlpha = 0.4 + fade*0.6;
+    ctx.shadowColor='#ff4400'; ctx.shadowBlur=18;
+    ctx.fillStyle='#cc2200';
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI*2); ctx.fill();
+    ctx.shadowColor='#ff8800'; ctx.shadowBlur=10;
+    ctx.fillStyle='#ff5500';
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r*.7, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle='#ffcc00';
+    ctx.beginPath(); ctx.arc(p.x-p.r*.2, p.y-p.r*.2, p.r*.35, 0, Math.PI*2); ctx.fill();
+    ctx.shadowBlur=0; ctx.globalAlpha=1;
   }
   ctx.restore();
 }
@@ -520,8 +706,10 @@ function drawHUD() {
     ctx.fillText(i<lives?'❤️':'🖤', W-12-(4-i)*34, 38);
   }
   ctx.font='15px "Comic Sans MS",cursive'; ctx.textAlign='left';
-  ctx.fillStyle=weapon==='baseball'?'#ffe44d':'#00ffcc';
-  ctx.fillText(weapon==='baseball'?'⚾ Baseball  (press 2 for laser)':'🔴 Laser  (press 1 for baseball)', 14, H-12);
+  const weaponColors = {baseball:'#ffe44d', laser:'#00ffcc', lava:'#ff6622', sword:'#aaddff'};
+  const weaponLabels = {baseball:'⚾ Baseball  [1]', laser:'🔴 Laser  [2]', lava:'🌋 Lava Spray  [3]', sword:'⚡ Lightning Sword  [4]'};
+  ctx.fillStyle=weaponColors[weapon];
+  ctx.fillText(weaponLabels[weapon] + '   (1/2/3/4 to switch)', 14, H-12);
 }
 
 // ── Floating Score Text ───────────────────────────────────────────
@@ -555,7 +743,7 @@ function drawTitle() {
   ctx.fillStyle='#adf'; ctx.font='18px "Comic Sans MS",cursive';
   ctx.textAlign='left';
   const ix=W/2+30, iy=H/2-50;
-  [['Arrow Keys','Move around'],['SPACE','Shoot!'],['1','⚾ Switch to Baseball'],['2','🔴 Switch to Laser']].forEach(([k,v],i)=>{
+  [['Arrow Keys','Move around'],['SPACE','Shoot!'],['1','⚾ Baseball'],['2','🔴 Laser'],['3','🌋 Lava Spray'],['4','⚡ Lightning Sword']].forEach(([k,v],i)=>{
     ctx.fillStyle='#ffe44d'; ctx.fillText(k, ix, iy+i*38);
     ctx.fillStyle='#adf';    ctx.fillText(v, ix+130, iy+i*38);
   });
@@ -623,6 +811,15 @@ function update() {
   if (player.invincible>0) player.invincible--;
   if (player.hitFlash>0)   player.hitFlash--;
 
+  // sword swing animation
+  if (swordSwinging>0) {
+    swordSwinging--;
+    const t=1-swordSwinging/22;
+    swordAngle=-1.5+t*2.2;
+  } else {
+    swordAngle+=((-0.8)-swordAngle)*.12;
+  }
+
   // spawn enemies
   const interval=Math.max(38,100-diff*10);
   if (++spawnTimer>=interval) { spawnEnemy(); spawnTimer=0; }
@@ -636,11 +833,16 @@ function update() {
   });
 
   // update projectiles
-  projectiles.forEach(p => { p.x+=p.vx; if (p.type==='baseball') p.spin+=.18; });
+  projectiles.forEach(p => {
+    p.x+=p.vx; p.y+=p.vy;
+    if (p.type==='baseball') { p.spin+=.18; p.y-=p.vy; } // baseball has no vertical drift
+    if (p.type==='lava') { p.vy+=.22; p.vx*=.985; p.life--; }
+  });
 
   // projectile vs enemy
   projectiles=projectiles.filter(p=>{
-    if (p.x>W+60) return false;
+    if (p.x>W+60 || p.y>H+30) return false;
+    if (p.type==='lava' && p.life<=0) return false;
     let hit=false;
     enemies=enemies.filter(e=>{
       if (hit) return true;
@@ -686,6 +888,10 @@ function update() {
   // floats
   floats.forEach(f=>{ f.y-=.8; f.life--; });
   floats=floats.filter(f=>f.life>0);
+
+  // lightnings
+  lightnings.forEach(l=>l.life--);
+  lightnings=lightnings.filter(l=>l.life>0);
 }
 
 // ── Main Loop ─────────────────────────────────────────────────────
@@ -697,6 +903,7 @@ function loop() {
     drawBG();
     drawParticles();
     enemies.forEach(drawWolf);
+    drawLightnings();
     projectiles.forEach(drawProjectile);
     drawPlayer();
     drawFloats();
