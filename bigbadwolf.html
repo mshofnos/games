@@ -97,6 +97,12 @@ function beep(type) {
     o.frequency.setValueAtTime(600,t); o.frequency.exponentialRampToValueAtTime(300,t+.08);
     g.gain.setValueAtTime(.1,t); g.gain.exponentialRampToValueAtTime(.001,t+.12);
     o.start(t); o.stop(t+.14);
+  } else if (type === 'grenadePlace') {
+    o.type='sine';
+    o.frequency.setValueAtTime(350,t); o.frequency.linearRampToValueAtTime(1100,t+.1);
+    o.frequency.linearRampToValueAtTime(280,t+.32);
+    g.gain.setValueAtTime(.18,t); g.gain.exponentialRampToValueAtTime(.001,t+.38);
+    o.start(t); o.stop(t+.42);
   } else if (type === 'nuke') {
     o.type='sawtooth';
     o.frequency.setValueAtTime(80,t); o.frequency.linearRampToValueAtTime(500,t+.07);
@@ -157,6 +163,33 @@ const PLANETS = [
   { x:800, y:320, r:16, col:'#88cc66', ring:false },
 ];
 
+// ── IndexedDB High Scores ─────────────────────────────────────────
+let db=null, topScores=[];
+function initDB() {
+  const req=indexedDB.open('BigBadWolf',1);
+  req.onupgradeneeded=e=>{
+    const d=e.target.result;
+    if (!d.objectStoreNames.contains('scores'))
+      d.createObjectStore('scores',{keyPath:'id',autoIncrement:true})
+       .createIndex('score','score',{unique:false});
+  };
+  req.onsuccess=e=>{ db=e.target.result; loadTopScores(); };
+  req.onerror=()=>{};
+}
+function saveScore(s) {
+  if (!db||s<=0) return;
+  const tx=db.transaction('scores','readwrite');
+  tx.objectStore('scores').add({score:s,date:Date.now()});
+  tx.oncomplete=()=>loadTopScores();
+}
+function loadTopScores() {
+  if (!db) return;
+  const tx=db.transaction('scores','readonly');
+  const req=tx.objectStore('scores').index('score').getAll();
+  req.onsuccess=e=>{ topScores=e.target.result.sort((a,b)=>b.score-a.score).slice(0,10); };
+}
+initDB();
+
 // ── Game State ────────────────────────────────────────────────────
 let gstate = 'charselect';  // charselect | playing | gameover
 let selectedChar = 'boy';   // boy | girl
@@ -164,11 +197,12 @@ let score=0, hiScore=0, lives=5, frame=0;
 let weapon = 'baseball';  // baseball | laser | lava | sword | boomerang | rainbow | bubble | icecream | flower
 let rainbowHue = 0, flowerIdx = 0;
 let shootCD = 0, spawnTimer = 0, diff = 1, diffTimer = 0;
-let powerupTimer = 400;
+let powerupTimer = 400, grenadePickupTimer = 600;
+let hasGrenade = false;
 
 const player = { x:110, y:H/2, speed:4.8, invincible:0, hitFlash:0 };
 
-let projectiles=[], enemies=[], particles=[], floats=[], lightnings=[], powerups=[];
+let projectiles=[], enemies=[], particles=[], floats=[], lightnings=[], powerups=[], rainbowZones=[];
 let swordAngle=-0.8, swordSwinging=0;
 
 // ── Input ─────────────────────────────────────────────────────────
@@ -176,17 +210,22 @@ const keys = {};
 document.addEventListener('keydown', e => {
   const fresh = !keys[e.code];
   keys[e.code] = true;
-  if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault();
+  if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Tab'].includes(e.code)) e.preventDefault();
   if (gstate==='charselect') {
     if (e.code==='ArrowLeft'  || e.code==='KeyA') selectedChar='boy';
     if (e.code==='ArrowRight' || e.code==='KeyD') selectedChar='girl';
+    if (fresh && e.code==='KeyH') { gstate='hiscores'; return; }
   }
+  if (gstate==='gameover' && fresh && e.code==='KeyH') { gstate='hiscores'; return; }
+  if (gstate==='hiscores' && fresh && (e.code==='Space'||e.code==='Enter'||e.code==='Escape'||e.code==='KeyH')) { gstate='charselect'; return; }
   if (gstate==='playing') {
     if (e.code==='Digit1') switchWeapon(selectedChar==='girl'?'rainbow':'baseball');
     if (e.code==='Digit2') switchWeapon(selectedChar==='girl'?'bubble':'laser');
     if (e.code==='Digit3') switchWeapon(selectedChar==='girl'?'icecream':'lava');
     if (e.code==='Digit4') switchWeapon(selectedChar==='girl'?'flower':'sword');
     if (e.code==='Digit5' && selectedChar==='boy') switchWeapon('boomerang');
+    if (e.code==='Tab') { cycleWeapon(); }
+    if (e.code==='KeyG' && hasGrenade) deployGrenade();
   }
   if (fresh && (e.code==='Space'||e.code==='Enter')) {
     initAudio();
@@ -253,9 +292,10 @@ function switchWeapon(w) {
 // ── Start / Reset ─────────────────────────────────────────────────
 function startGame() {
   score=0; lives=5; frame=0; diff=1; diffTimer=0;
-  weapon=selectedChar==='girl'?'rainbow':'baseball'; rainbowHue=0; flowerIdx=0; shootCD=0; spawnTimer=0; powerupTimer=400;
+  weapon=selectedChar==='girl'?'rainbow':'baseball'; rainbowHue=0; flowerIdx=0; shootCD=0; spawnTimer=0; powerupTimer=400; grenadePickupTimer=600;
+  hasGrenade=false;
   player.x=110; player.y=H/2; player.invincible=0; player.hitFlash=0;
-  projectiles=[]; enemies=[]; particles=[]; floats=[]; lightnings=[]; powerups=[];
+  projectiles=[]; enemies=[]; particles=[]; floats=[]; lightnings=[]; powerups=[]; rainbowZones=[];
   swordAngle=-0.8; swordSwinging=0;
   gstate='playing';
   beep('start');
@@ -319,6 +359,26 @@ function shoot() {
     projectiles.push({type:'bubble', x:cx, y:cy, vx:4.5, vy:0, r:21, wobble:Math.random()*Math.PI*2});
     shootCD=22; beep('bubble');
   }
+}
+
+// ── Grenade Deploy ────────────────────────────────────────────────
+function deployGrenade() {
+  rainbowZones.push({x:player.x+110, y:player.y, r:90, life:300, maxLife:300});
+  hasGrenade=false;
+  beep('grenadePlace');
+  spawnFloat(player.x+110, player.y-55, '🌈 Rainbow Zone!', '#ff88ff', 55);
+}
+
+// ── Bubble Split Helper ───────────────────────────────────────────
+function makeSplitBubbles(parent, bvx, bvy) {
+  const baseA=Math.atan2(bvy,bvx);
+  const spd=Math.max(3.5, Math.sqrt(bvx*bvx+bvy*bvy)*.82);
+  return [-30,0,30].map(deg=>({
+    type:'bubble', x:parent.x, y:parent.y,
+    vx:Math.cos(baseA+deg*Math.PI/180)*spd,
+    vy:Math.sin(baseA+deg*Math.PI/180)*spd,
+    r:11, wobble:Math.random()*Math.PI*2, isChild:true
+  }));
 }
 
 // ── Spawn Enemy ───────────────────────────────────────────────────
@@ -912,31 +972,70 @@ function drawParticles() {
   });
 }
 
+// ── Draw Rainbow Zones ────────────────────────────────────────────
+function drawRainbowZones() {
+  const rc=['#ff4444','#ff9900','#ffee00','#44ee44','#4499ff','#aa44ff','#ff44cc'];
+  rainbowZones.forEach(z=>{
+    const fade=z.life/z.maxLife;
+    ctx.save(); ctx.globalAlpha=fade*.82;
+    // concentric rainbow rings pulsing outward
+    for (let i=0;i<rc.length;i++) {
+      const ri=z.r*(1-(i/rc.length)*.55);
+      ctx.strokeStyle=rc[i]; ctx.lineWidth=4+i*.5;
+      ctx.shadowColor=rc[i]; ctx.shadowBlur=10;
+      ctx.beginPath(); ctx.arc(z.x,z.y,ri*(1+.06*Math.sin(frame*.18+i)),0,Math.PI*2); ctx.stroke();
+    }
+    // fill
+    ctx.shadowBlur=0;
+    const rg=ctx.createRadialGradient(z.x,z.y,4,z.x,z.y,z.r);
+    rg.addColorStop(0,`rgba(255,255,255,${fade*.18})`);
+    rg.addColorStop(1,`rgba(200,100,255,${fade*.07})`);
+    ctx.fillStyle=rg; ctx.beginPath(); ctx.arc(z.x,z.y,z.r,0,Math.PI*2); ctx.fill();
+    // timer arc (shows time remaining)
+    ctx.strokeStyle=`rgba(255,255,255,${fade*.5})`; ctx.lineWidth=3; ctx.shadowBlur=0;
+    ctx.beginPath(); ctx.arc(z.x,z.y,z.r+6,-.5*Math.PI,-.5*Math.PI+Math.PI*2*fade); ctx.stroke();
+    ctx.restore();
+  });
+}
+
 // ── Draw Power-ups ────────────────────────────────────────────────
 function drawPowerups() {
   powerups.forEach(pu=>{
     ctx.save(); ctx.translate(pu.x, pu.y);
     const pulse=.82+.18*Math.sin(frame*.14+pu.phase);
-    const hue=(frame*3+pu.phase*50)%360;
-    // outer glow ring
-    ctx.shadowColor=`hsl(${hue},100%,68%)`; ctx.shadowBlur=28;
-    // glowing orb
-    const rg=ctx.createRadialGradient(0,0,2,0,0,pu.r*pulse);
-    rg.addColorStop(0,'#ffffff');
-    rg.addColorStop(.35,`hsl(${hue},100%,78%)`);
-    rg.addColorStop(1,`hsl(${(hue+90)%360},100%,44%)`);
-    ctx.fillStyle=rg;
-    ctx.beginPath(); ctx.arc(0,0,pu.r*pulse,0,Math.PI*2); ctx.fill();
-    // spinning star
-    ctx.save(); ctx.rotate(frame*.05); ctx.shadowColor='#fff'; ctx.shadowBlur=6;
-    ctx.fillStyle='rgba(255,255,255,.88)';
-    drawStar5(0,0,pu.r*.75*pulse,pu.r*.32*pulse);
-    ctx.restore();
-    // label
-    ctx.shadowBlur=0; ctx.fillStyle='#ff2200';
-    ctx.font=`bold ${Math.round(13*pulse)}px Arial`;
-    ctx.textAlign='center'; ctx.textBaseline='middle';
-    ctx.fillText('!', 0, 1);
+    if (pu.type==='grenade') {
+      // Rainbow gem / grenade collectible
+      const hues=['#ff4','#8f8','#4af','#f4f','#fa4'];
+      ctx.shadowColor='#ff88ff'; ctx.shadowBlur=22;
+      // gem body (diamond)
+      ctx.save(); ctx.rotate(frame*.03+pu.phase);
+      ctx.fillStyle='rgba(255,100,255,.18)';
+      ctx.beginPath();
+      ctx.moveTo(0,-pu.r*pulse*1.1); ctx.lineTo(pu.r*pulse*.75,0);
+      ctx.lineTo(0,pu.r*pulse*.9); ctx.lineTo(-pu.r*pulse*.75,0); ctx.closePath(); ctx.fill();
+      hues.forEach((c,i)=>{
+        const a=(i/hues.length)*Math.PI*2+frame*.06;
+        ctx.fillStyle=c; ctx.globalAlpha=.7;
+        ctx.beginPath(); ctx.arc(Math.cos(a)*pu.r*.45*pulse,Math.sin(a)*pu.r*.45*pulse,3.5,0,Math.PI*2); ctx.fill();
+      });
+      ctx.restore();
+      ctx.globalAlpha=1; ctx.shadowBlur=0;
+      ctx.fillStyle='rgba(255,255,255,.9)'; ctx.font=`bold ${Math.round(15*pulse)}px Arial`;
+      ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('🌈',0,1);
+    } else {
+      // Nuke star orb (existing)
+      const hue=(frame*3+pu.phase*50)%360;
+      ctx.shadowColor=`hsl(${hue},100%,68%)`; ctx.shadowBlur=28;
+      const rg=ctx.createRadialGradient(0,0,2,0,0,pu.r*pulse);
+      rg.addColorStop(0,'#ffffff'); rg.addColorStop(.35,`hsl(${hue},100%,78%)`);
+      rg.addColorStop(1,`hsl(${(hue+90)%360},100%,44%)`);
+      ctx.fillStyle=rg; ctx.beginPath(); ctx.arc(0,0,pu.r*pulse,0,Math.PI*2); ctx.fill();
+      ctx.save(); ctx.rotate(frame*.05); ctx.shadowColor='#fff'; ctx.shadowBlur=6;
+      ctx.fillStyle='rgba(255,255,255,.88)'; drawStar5(0,0,pu.r*.75*pulse,pu.r*.32*pulse); ctx.restore();
+      ctx.shadowBlur=0; ctx.fillStyle='#ff2200';
+      ctx.font=`bold ${Math.round(13*pulse)}px Arial`; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText('!',0,1);
+    }
     ctx.restore();
   });
 }
@@ -955,8 +1054,14 @@ function drawHUD() {
   const weaponColors = {baseball:'#ffe44d', laser:'#00ffcc', lava:'#ff6622', sword:'#aaddff', boomerang:'#ffaa22', rainbow:'#ff88ff', bubble:'#88eeff', icecream:'#ffb3c6', flower:'#ff66cc'};
   const weaponLabels = {baseball:'⚾ Baseball [1]', laser:'🔴 Laser [2]', lava:'🌋 Lava [3]', sword:'⚡ Sword [4]', boomerang:'🪃 Boomerang [5]', rainbow:'🌈 Rainbow [1]', bubble:'🫧 Bubbles [2]', icecream:'🍦 Ice Cream [3]', flower:'🌸 Flowers [4]'};
   ctx.fillStyle=weaponColors[weapon]||'#fff';
-  const switchHint = selectedChar==='girl' ? '(1-4 to switch)' : '(1-5 to switch)';
+  const switchHint = selectedChar==='girl' ? '(1-4/Tab)' : '(1-5/Tab)';
   ctx.fillText((weaponLabels[weapon]||weapon) + '   ' + switchHint, 14, H-12);
+  if (hasGrenade) {
+    ctx.fillStyle='#ff88ff'; ctx.font='bold 15px "Comic Sans MS",cursive';
+    ctx.textAlign='right';
+    const gl=.7+.3*Math.sin(frame*.14);
+    ctx.globalAlpha=gl; ctx.fillText('🌈 GRENADE ready! [G]', W-14, H-12); ctx.globalAlpha=1;
+  }
 }
 
 // ── Floating Score Text ───────────────────────────────────────────
@@ -1004,19 +1109,66 @@ function drawTitle() {
 
 function drawGameOver() {
   drawBG();
-  ctx.fillStyle='rgba(0,0,18,.9)';
-  ctx.beginPath(); ctx.roundRect(W/2-250,H/2-160,500,320,20); ctx.fill();
+  ctx.fillStyle='rgba(0,0,18,.92)';
+  ctx.beginPath(); ctx.roundRect(W/2-260,H/2-175,520,390,20); ctx.fill();
   ctx.strokeStyle='#f44'; ctx.lineWidth=3; ctx.stroke();
   ctx.textAlign='center';
-  ctx.fillStyle='#f44'; ctx.font='bold 60px "Comic Sans MS",cursive';
-  ctx.fillText('Game Over!', W/2, H/2-80);
-  ctx.fillStyle='#fff'; ctx.font='bold 30px "Comic Sans MS",cursive';
-  ctx.fillText(`Score: ${score}`, W/2, H/2-20);
-  ctx.fillStyle='#ffe44d'; ctx.fillText(`Best: ${hiScore}`, W/2, H/2+28);
+  ctx.fillStyle='#f44'; ctx.font='bold 54px "Comic Sans MS",cursive';
+  ctx.fillText('Game Over!', W/2, H/2-100);
+  ctx.fillStyle='#fff'; ctx.font='bold 28px "Comic Sans MS",cursive';
+  ctx.fillText(`Score: ${score}`, W/2, H/2-48);
+  ctx.fillStyle='#ffe44d'; ctx.font='bold 20px "Comic Sans MS",cursive';
+  ctx.fillText(`Best: ${hiScore}`, W/2, H/2-18);
+  // top scores list
+  ctx.fillStyle='#adf'; ctx.font='bold 15px "Comic Sans MS",cursive';
+  ctx.fillText('── Top Scores ──', W/2, H/2+12);
+  const show=topScores.slice(0,5);
+  show.forEach((s,i)=>{
+    const y=H/2+32+i*28;
+    const medals=['🥇','🥈','🥉','🏅','🏅'];
+    ctx.font='15px "Comic Sans MS",cursive';
+    ctx.fillStyle=i===0?'#ffe44d':i<3?'#bbb':'#adf';
+    ctx.textAlign='right'; ctx.fillText(`${medals[i]} ${s.score}`, W/2+50, y);
+    ctx.textAlign='left'; ctx.fillStyle='#556';
+    ctx.font='12px "Comic Sans MS",cursive';
+    ctx.fillText(new Date(s.date).toLocaleDateString(), W/2+60, y);
+  });
+  if (show.length===0) { ctx.fillStyle='#556'; ctx.font='14px "Comic Sans MS",cursive'; ctx.textAlign='center'; ctx.fillText('No scores saved yet', W/2, H/2+45); }
   const pulse=.7+.3*Math.sin(frame*.08);
-  ctx.globalAlpha=pulse; ctx.fillStyle='#adf';
-  ctx.font='bold 24px "Comic Sans MS",cursive';
-  ctx.fillText('Press SPACE to choose your hero!', W/2, H/2+110);
+  ctx.globalAlpha=pulse; ctx.textAlign='center'; ctx.fillStyle='#adf';
+  ctx.font='bold 20px "Comic Sans MS",cursive';
+  ctx.fillText('SPACE: choose hero   H: high scores', W/2, H/2+192);
+  ctx.globalAlpha=1;
+}
+
+function drawHiscores() {
+  drawBG();
+  ctx.fillStyle='rgba(2,2,30,.93)';
+  ctx.beginPath(); ctx.roundRect(W/2-240,50,480,460,22); ctx.fill();
+  ctx.strokeStyle='#ffe44d'; ctx.lineWidth=3;
+  ctx.shadowColor='#ffe44d'; ctx.shadowBlur=20; ctx.stroke(); ctx.shadowBlur=0;
+  ctx.textAlign='center';
+  ctx.fillStyle='#ffe44d'; ctx.font='bold 40px "Comic Sans MS",cursive';
+  ctx.fillText('🏆 High Scores', W/2, 110);
+  const medals=['🥇','🥈','🥉','🏅','🏅','🏅','🏅','🏅','🏅','🏅'];
+  if (topScores.length===0) {
+    ctx.fillStyle='#adf'; ctx.font='22px "Comic Sans MS",cursive';
+    ctx.fillText('No scores yet! Play a game first.', W/2, 290);
+  } else {
+    topScores.forEach((s,i)=>{
+      const y=148+i*32;
+      ctx.font='bold 19px "Comic Sans MS",cursive';
+      ctx.fillStyle=i===0?'#ffe44d':i===1?'#cccccc':i===2?'#cc8844':'#adf';
+      ctx.textAlign='center'; ctx.fillText(`${medals[i]}  #${i+1}`, W/2-100, y);
+      ctx.textAlign='left'; ctx.fillText(s.score, W/2-30, y);
+      ctx.fillStyle='#558'; ctx.font='13px "Comic Sans MS",cursive';
+      ctx.fillText(new Date(s.date).toLocaleDateString(), W/2+60, y);
+    });
+  }
+  const pulse=.7+.3*Math.sin(frame*.08);
+  ctx.globalAlpha=pulse; ctx.fillStyle='#adf'; ctx.textAlign='center';
+  ctx.font='bold 20px "Comic Sans MS",cursive';
+  ctx.fillText('Press SPACE / H to go back', W/2, 472);
   ctx.globalAlpha=1;
 }
 
@@ -1303,7 +1455,7 @@ function drawCharSelect() {
   // Controls hint
   ctx.textAlign='center'; ctx.fillStyle='#aaddff';
   ctx.font='17px "Comic Sans MS",cursive';
-  ctx.fillText('← → to choose  •  tap a card on mobile', W/2, 494);
+  ctx.fillText('← → to choose  •  H: high scores  •  tap a card on mobile', W/2, 494);
 
   // Play button
   const pulse=.7+.3*Math.sin(frame*.08+1);
@@ -1384,9 +1536,18 @@ function update() {
   });
 
   // projectile vs enemy
+  const newProj=[];
   projectiles=projectiles.filter(p=>{
-    if (p.x>W+60 || p.y>H+30) return false;
+    if (p.x>W+60 || p.x<-80 || p.y>H+40 || p.y<-40) return false;
     if (p.type==='lava' && p.life<=0) return false;
+    // bubble wall bounce (parent only, once)
+    if (p.type==='bubble' && !p.isChild) {
+      let nx=p.vx, ny=p.vy, bounced=false;
+      if (p.x>W-28 && p.vx>0)  { nx=-Math.abs(nx); bounced=true; }
+      if (p.y<28   && p.vy<0)  { ny= Math.abs(ny); bounced=true; }
+      if (p.y>H-28 && p.vy>0) { ny=-Math.abs(ny); bounced=true; }
+      if (bounced) { newProj.push(...makeSplitBubbles(p,nx,ny)); return false; }
+    }
     if (p.type==='boomerang') {
       if (p.returning && p.x < player.x-20) return false;
       enemies=enemies.filter(e=>{
@@ -1427,8 +1588,10 @@ function update() {
       }
       return true;
     });
+    if (hit && p.type==='bubble' && !p.isChild) { newProj.push(...makeSplitBubbles(p,p.vx,p.vy)); return false; }
     return !hit;
   });
+  projectiles.push(...newProj);
 
   // enemy vs player
   if (player.invincible===0) {
@@ -1437,7 +1600,7 @@ function update() {
         lives--; player.invincible=130; player.hitFlash=22;
         burst(player.x,player.y,'#f44','#fa0',9);
         beep('ouch');
-        if (lives<=0) { gstate='gameover'; burst(player.x,player.y,'#f44','#f80',30); }
+        if (lives<=0) { gstate='gameover'; burst(player.x,player.y,'#f44','#f80',30); saveScore(score); }
         return false;
       }
       return true;
@@ -1447,11 +1610,19 @@ function update() {
   enemies=enemies.filter(e=>e.x>-130);
 
   // power-ups: spawn, move, collect
-  if (++powerupTimer > 850) { powerupTimer=0; powerups.push({x:W+40, y:90+Math.random()*(H-180), phase:Math.random()*Math.PI*2, r:22}); }
+  if (++powerupTimer > 850) { powerupTimer=0; powerups.push({type:'nuke', x:W+40, y:90+Math.random()*(H-180), phase:Math.random()*Math.PI*2, r:22}); }
+  if (++grenadePickupTimer > 700) { grenadePickupTimer=0; powerups.push({type:'grenade', x:W+40, y:90+Math.random()*(H-180), phase:Math.random()*Math.PI*2, r:20}); }
   powerups.forEach(pu => { pu.x-=1.6; pu.phase+=.04; pu.y+=Math.sin(pu.phase)*.7; });
   powerups=powerups.filter(pu=>{
     if (pu.x < -60) return false;
-    if (Math.abs(pu.x-player.x)<38 && Math.abs(pu.y-player.y)<38) {
+    if (Math.abs(pu.x-player.x)<40 && Math.abs(pu.y-player.y)<40) {
+      if (pu.type==='grenade') {
+        hasGrenade=true;
+        beep('start');
+        spawnFloat(player.x,player.y-55,'🌈 Grenade! (G)','#ff88ff',65);
+        return false;
+      }
+      // nuke
       enemies.forEach(e=>{
         const cols=e.type==='bigbad'?['#ff4','#f84','#fff','#f44']:['#fe4','#f8a','#8af','#fff'];
         burst(e.x,e.y,cols[0],cols[1],e.type==='bigbad'?28:16);
@@ -1468,6 +1639,22 @@ function update() {
     }
     return true;
   });
+
+  // rainbow zones: damage enemies that enter, then expire
+  rainbowZones.forEach(z=>z.life--);
+  enemies=enemies.filter(e=>{
+    if (rainbowZones.some(z=>Math.hypot(e.x-z.x,e.y-z.y)<z.r)) {
+      const cols=e.type==='bigbad'?['#ff4','#f84','#fff','#f44']:['#fe4','#f8a','#8af','#fff'];
+      burst(e.x,e.y,cols[0],cols[1],e.type==='bigbad'?22:12);
+      burst(e.x,e.y,cols[2],cols[3],6);
+      const pts=e.type==='bigbad'?30:10;
+      score+=pts; if(score>hiScore) hiScore=score;
+      spawnFloat(e.x,e.y-45,`+${pts}`,'#ff88ff',45);
+      beep('boom'); return false;
+    }
+    return true;
+  });
+  rainbowZones=rainbowZones.filter(z=>z.life>0);
 
   // particles
   particles.forEach(p=>{ p.x+=p.vx; p.y+=p.vy; p.vy+=.05; p.vx*=.96; p.vy*=.96; p.life--; p.r*=.98; });
@@ -1501,10 +1688,12 @@ function drawWeaponBtn() {
 function loop() {
   if (gstate==='charselect') { update(); drawCharSelect(); }
   else if (gstate==='gameover') { update(); drawGameOver(); }
+  else if (gstate==='hiscores') { update(); drawHiscores(); }
   else {
     update();
     drawBG();
     drawParticles();
+    drawRainbowZones();
     enemies.forEach(drawWolf);
     drawLightnings();
     projectiles.forEach(drawProjectile);
