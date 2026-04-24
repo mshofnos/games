@@ -310,6 +310,15 @@ canvas.addEventListener('touchend', e => {
 });
 canvas.addEventListener('touchcancel', () => { touchPos=null; });
 
+canvas.addEventListener('mousedown', e => {
+  if (!paused) return;
+  const r=canvas.getBoundingClientRect();
+  const cx=(e.clientX-r.left)*(W/r.width);
+  // Resume button (left), Quit button (right)
+  if (cx < W/2) paused=false;
+  else { paused=false; gstate='charselect'; }
+});
+
 function switchWeapon(w) {
   weapon = w;
   const labels = {baseball:'⚾ Baseball!', laser:'🔴 Laser!', lava:'🌋 Lava Spray!', sword:'⚡ Lightning Sword!', boomerang:'🪃 Boomerang!', rainbow:'🌈 Rainbow Blast!', bubble:'🫧 Bubbles!', icecream:'🍦 Ice Cream!', flower:'🌸 Flowers!'};
@@ -412,6 +421,15 @@ function distToBeam(ex,ey,px,py,angle,length) {
   const cos=Math.cos(angle), sin=Math.sin(angle);
   const t=Math.max(0,Math.min(length,(ex-px)*cos+(ey-py)*sin));
   return Math.hypot(ex-px-cos*t, ey-py-sin*t);
+}
+function beamLengthToEdge(px,py,angle) {
+  const cos=Math.cos(angle), sin=Math.sin(angle);
+  let t=Infinity;
+  if (cos> 1e-4) t=Math.min(t,(W-px)/cos);
+  else if (cos<-1e-4) t=Math.min(t,-px/cos);
+  if (sin> 1e-4) t=Math.min(t,(H-py)/sin);
+  else if (sin<-1e-4) t=Math.min(t,-py/sin);
+  return t;
 }
 
 // ── Bubble Split Helper ───────────────────────────────────────────
@@ -1020,11 +1038,12 @@ function drawParticles() {
 // ── Draw Rainbow Beams (power-up state) ──────────────────────────
 function drawRainbowBeams() {
   if (!chargeActive) return;
-  const beamLen=300, fade=Math.min(1,chargeTimer/30);
+  const fade=Math.min(1,chargeTimer/30);
   const rc=['#ff2222','#ff8800','#ffee00','#22ee22','#22aaff','#4488ff','#aa22ff','#ff22cc'];
   ctx.save(); ctx.globalAlpha=fade*.88;
   for (let i=0;i<8;i++) {
     const a=i*Math.PI/4+frame*.008;
+    const beamLen=beamLengthToEdge(player.x,player.y,a);
     const ex=player.x+Math.cos(a)*beamLen, ey=player.y+Math.sin(a)*beamLen;
     ctx.shadowColor=rc[i]; ctx.shadowBlur=20;
     ctx.strokeStyle=rc[i]; ctx.lineWidth=8; ctx.lineCap='round';
@@ -1600,10 +1619,10 @@ function update() {
 
   // rainbow beams kill enemies when powered up
   if (chargeActive) {
-    const beamLen=300;
     enemies=enemies.filter(e=>{
       for (let i=0;i<8;i++) {
         const a=i*Math.PI/4+frame*.008;
+        const beamLen=beamLengthToEdge(player.x,player.y,a);
         if (distToBeam(e.x,e.y,player.x,player.y,a,beamLen)<28) {
           const cols=e.type==='bigbad'?['#ff4','#f84','#fff','#f44']:['#fe4','#f8a','#8af','#fff'];
           burst(e.x,e.y,cols[0],cols[1],e.type==='bigbad'?22:12);
