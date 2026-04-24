@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Background -->
+  <rect width="512" height="512" rx="90" fill="#000418"/>
+  <!-- Background stars -->
+  <circle cx="72"  cy="90"  r="3.5" fill="#fff" opacity=".55"/>
+  <circle cx="190" cy="52"  r="2.5" fill="#fff" opacity=".45"/>
+  <circle cx="420" cy="75"  r="3"   fill="#fff" opacity=".6"/>
+  <circle cx="460" cy="200" r="2"   fill="#fff" opacity=".5"/>
+  <circle cx="90"  cy="320" r="2.5" fill="#fff" opacity=".55"/>
+  <circle cx="370" cy="420" r="3"   fill="#fff" opacity=".45"/>
+  <circle cx="310" cy="130" r="2"   fill="#fff" opacity=".4"/>
+  <circle cx="150" cy="400" r="2"   fill="#fff" opacity=".5"/>
+  <!-- Saturn-like planet -->
+  <ellipse cx="400" cy="110" rx="38" ry="38" fill="#c07855" opacity=".35"/>
+  <ellipse cx="400" cy="110" rx="72" ry="15" fill="none" stroke="#c07855" stroke-width="7" opacity=".3"/>
+  <!-- Big yellow star (5-pointed) -->
+  <polygon points="256,68 284,168 388,168 306,228 334,328 256,268 178,328 206,228 124,168 228,168"
+           fill="#ffe44d"/>
+  <!-- Star inner glow -->
+  <polygon points="256,104 276,164 340,164 290,200 310,260 256,224 202,260 222,200 172,164 236,164"
+           fill="#fff5a0" opacity=".55"/>
+  <!-- Wolf silhouette (small, below star) -->
+  <g transform="translate(256,370) scale(0.7)">
+    <!-- body -->
+    <ellipse cx="0" cy="15" rx="38" ry="30" fill="#888898"/>
+    <!-- head -->
+    <ellipse cx="0" cy="-28" rx="28" ry="26" fill="#888898"/>
+    <!-- ears -->
+    <polygon points="-20,-48 -32,-72 -6,-52" fill="#888898"/>
+    <polygon points=" 20,-48  32,-72  6,-52" fill="#888898"/>
+    <!-- eyes -->
+    <ellipse cx="-10" cy="-32" rx="7" ry="8" fill="#ffee00"/>
+    <ellipse cx=" 10" cy="-32" rx="7" ry="8" fill="#ffee00"/>
+    <ellipse cx="-10" cy="-32" rx="3" ry="6" fill="#111"/>
+    <ellipse cx=" 10" cy="-32" rx="3" ry="6" fill="#111"/>
+    <!-- snout -->
+    <ellipse cx="0" cy="-16" rx="16" ry="11" fill="#aaaabe"/>
+    <!-- nose -->
+    <ellipse cx="0" cy="-20" rx="7" ry="5" fill="#111"/>
+  </g>
+</svg>
