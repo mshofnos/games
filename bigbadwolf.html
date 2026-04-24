@@ -400,7 +400,7 @@ function shoot() {
 // ── Grenade Deploy ────────────────────────────────────────────────
 function deployGrenade() {
   if (grenadeCount<=0) return;
-  rainbowZones.push({x:player.x+110, y:player.y, r:90, life:300, maxLife:300});
+  rainbowZones.push({x:player.x+110, y:player.y, r:90, vx:1.6});
   grenadeCount--;
   beep('grenadePlace');
   spawnFloat(player.x+110, player.y-55, '🌈 Rainbow Zone!', '#ff88ff', 55);
@@ -1093,8 +1093,7 @@ function drawPauseOverlay() {
 function drawRainbowZones() {
   const rc=['#ff4444','#ff9900','#ffee00','#44ee44','#4499ff','#aa44ff','#ff44cc'];
   rainbowZones.forEach(z=>{
-    const fade=z.life/z.maxLife;
-    ctx.save(); ctx.globalAlpha=fade*.82;
+    ctx.save(); ctx.globalAlpha=.82;
     // concentric rainbow rings pulsing outward
     for (let i=0;i<rc.length;i++) {
       const ri=z.r*(1-(i/rc.length)*.55);
@@ -1105,12 +1104,9 @@ function drawRainbowZones() {
     // fill
     ctx.shadowBlur=0;
     const rg=ctx.createRadialGradient(z.x,z.y,4,z.x,z.y,z.r);
-    rg.addColorStop(0,`rgba(255,255,255,${fade*.18})`);
-    rg.addColorStop(1,`rgba(200,100,255,${fade*.07})`);
+    rg.addColorStop(0,'rgba(255,255,255,.18)');
+    rg.addColorStop(1,'rgba(200,100,255,.07)');
     ctx.fillStyle=rg; ctx.beginPath(); ctx.arc(z.x,z.y,z.r,0,Math.PI*2); ctx.fill();
-    // timer arc (shows time remaining)
-    ctx.strokeStyle=`rgba(255,255,255,${fade*.5})`; ctx.lineWidth=3; ctx.shadowBlur=0;
-    ctx.beginPath(); ctx.arc(z.x,z.y,z.r+6,-.5*Math.PI,-.5*Math.PI+Math.PI*2*fade); ctx.stroke();
     ctx.restore();
   });
 }
@@ -1801,7 +1797,7 @@ function update() {
   });
 
   // rainbow zones: damage enemies that enter, then expire
-  rainbowZones.forEach(z=>z.life--);
+  rainbowZones.forEach(z=>z.x+=z.vx);
   enemies=enemies.filter(e=>{
     if (rainbowZones.some(z=>Math.hypot(e.x-z.x,e.y-z.y)<z.r)) {
       const cols=e.type==='bigbad'?['#ff4','#f84','#fff','#f44']:['#fe4','#f8a','#8af','#fff'];
@@ -1814,7 +1810,7 @@ function update() {
     }
     return true;
   });
-  rainbowZones=rainbowZones.filter(z=>z.life>0);
+  rainbowZones=rainbowZones.filter(z=>z.x-z.r<W+20);
 
   // particles
   particles.forEach(p=>{ p.x+=p.vx; p.y+=p.vy; p.vy+=.05; p.vx*=.96; p.vy*=.96; p.life--; p.r*=.98; });
